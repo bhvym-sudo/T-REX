@@ -1,0 +1,41 @@
+{
+  "name": "t-rex-osint",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop OSINT workstation with Electron UI and Go backend",
+  "author": "T-REX OSINT",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "start": "npm run build:backend && electron .",
+    "dev": "node scripts/dev.cjs",
+    "start:backend": "go run ./backend/cmd/trex",
+    "start:desktop": "electron .",
+    "build:backend": "node scripts/build-backend.cjs",
+    "build:desktop": "electron-builder --dir",
+    "dist": "npm run build:backend && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^37.2.3",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "org.trex.osint",
+    "productName": "T-REX OSINT",
+    "asar": true,
+    "files": [
+      "desktop/**/*",
+      "bin/trex-backend.exe",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "bin/trex-backend.exe",
+        "to": "backend/trex-backend.exe"
+      }
+    ],
+    "win": {
+      "target": "dir",
+      "artifactName": "T-REX-OSINT-${version}-${arch}.${ext}"
+    }
+  }
+}

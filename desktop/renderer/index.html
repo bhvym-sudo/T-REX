@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>T-REX OSINT</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <section id="startup" class="startup-screen">
+    <div class="startup-shell">
+      <div class="brand-mark">T</div>
+      <p class="eyebrow">SOCIAL INTELLIGENCE WORKSTATION</p>
+      <h1>T-REX OSINT</h1>
+      <p class="startup-copy">Preparing the collection engine and checking the authenticated X workspace.</p>
+      <div class="progress-track"><div id="startup-progress" class="progress-fill"></div></div>
+      <p id="startup-status" class="status-line">Starting Go backend…</p>
+      <button id="startup-action" class="primary hidden">Open Microsoft Edge</button>
+    </div>
+  </section>
+
+  <main id="workspace" class="workspace hidden">
+    <header class="app-header">
+      <div class="brand-lockup">
+        <span class="mini-mark">T</span>
+        <div><strong>T-REX OSINT</strong><small>Analyst workspace</small></div>
+      </div>
+      <div class="session-pill"><span></span><b id="session-label">Session ready</b></div>
+    </header>
+
+    <nav class="tabs" aria-label="Workspace tabs">
+      <button class="tab active" data-tab="scan">Scan</button>
+      <button class="tab" data-tab="tracker">Tracker</button>
+      <button class="tab" data-tab="tweet-analysis">Tweet Analysis</button>
+      <button class="tab" data-tab="account-info">Account Info</button>
+      <button class="tab" data-tab="investigation">Investigation</button>
+    </nav>
+
+    <section id="tab-scan" class="tab-panel active">
+      <aside class="control-panel">
+        <p class="eyebrow">COLLECTION</p>
+        <h2>Scan</h2>
+        <label>Search type</label>
+        <div class="radio-row" id="scan-mode">
+          <label><input type="radio" name="scanMode" value="keywords" checked><span>Keywords</span></label>
+          <label><input type="radio" name="scanMode" value="accounts"><span>Accounts</span></label>
+          <label><input type="radio" name="scanMode" value="custom"><span>Custom</span></label>
+        </div>
+        <label>Result type</label>
+        <div class="radio-row">
+          <label><input type="radio" name="resultMode" value="latest" checked><span>Latest</span></label>
+          <label><input type="radio" name="resultMode" value="top"><span>Top</span></label>
+        </div>
+        <div id="standard-query-fields">
+          <label id="terms-label" for="terms-input">Keywords</label>
+          <textarea id="terms-input" rows="3" placeholder="Enter values separated by commas"></textarea>
+          <div id="account-filter-wrap" class="hidden">
+            <label for="account-filter">Account keyword filter</label>
+            <input id="account-filter" placeholder="Optional filters, separated by commas">
+          </div>
+          <label>Match mode</label>
+          <select id="match-mode">
+            <option value="OR">Any keyword (OR)</option>
+            <option value="AND">All keywords (AND)</option>
+          </select>
+          <div class="date-grid">
+            <div><label for="from-date">From date</label><input id="from-date" type="date"></div>
+            <div><label for="to-date">To date</label><input id="to-date" type="date"></div>
+          </div>
+        </div>
+        <div id="custom-query-fields" class="hidden">
+          <label for="custom-query">Custom X query</label>
+          <textarea id="custom-query" rows="8" placeholder='(term OR "phrase") lang:en since:2026-07-01 until:2026-07-10'></textarea>
+          <p id="query-validation" class="hint">The query is checked locally before collection.</p>
+        </div>
+        <button id="scan-button" class="primary">Execute Scan</button>
+        <div class="progress-track compact"><div id="scan-progress" class="progress-fill"></div></div>
+        <p id="scan-status" class="status-line">Ready</p>
+      </aside>
+      <div class="divider"></div>
+      <section class="content-panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">RESULTS</p><h2>Extracted Posts</h2></div>
+          <div class="count-badge"><strong id="post-count">0</strong><span>posts</span></div>
+        </div>
+        <div id="posts-list" class="posts-list"><div class="empty-state">Scan results will appear here.</div></div>
+      </section>
+    </section>
+
+    <section id="tab-tracker" class="tab-panel">
+      <div class="analysis-layout">
+        <aside class="control-panel">
+          <p class="eyebrow">CONTINUOUS COLLECTION</p>
+          <h2>Tracker</h2>
+          <label for="tracker-terms">Keywords</label>
+          <textarea id="tracker-terms" rows="5" placeholder="Enter values separated by commas"></textarea>
+          <label for="tracker-interval">Polling interval in seconds</label>
+          <input id="tracker-interval" type="number" min="15" value="30">
+          <button id="tracker-start" class="primary">Start Tracker</button>
+          <button id="tracker-stop" class="secondary" disabled>Stop Tracker</button>
+          <p id="tracker-status" class="status-line">Ready</p>
+        </aside>
+        <div class="divider"></div>
+        <section class="content-panel">
+          <div class="section-heading"><div><p class="eyebrow">LIVE STREAM</p><h2>Tracked Posts</h2></div><div class="count-badge"><strong id="tracker-count">0</strong><span>posts</span></div></div>
+          <div id="tracker-posts" class="posts-list"><div class="empty-state">New tracked posts will stream here.</div></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="tab-tweet-analysis" class="tab-panel">
+      <div class="analysis-layout">
+        <aside class="control-panel">
+          <p class="eyebrow">CONVERSATION</p>
+          <h2>Tweet Analysis</h2>
+          <label for="tweet-input">Tweet URL or ID</label>
+          <input id="tweet-input" placeholder="https://x.com/user/status/…">
+          <label for="reply-limit">Maximum accessible replies</label>
+          <input id="reply-limit" type="number" min="1" max="10000" value="5000">
+          <button id="reply-button" class="primary">Collect Replies</button>
+          <div class="progress-track compact"><div id="reply-progress" class="progress-fill"></div></div>
+          <p id="reply-status" class="status-line">Ready</p>
+        </aside>
+        <div class="divider"></div>
+        <section class="content-panel">
+          <div class="section-heading"><div><p class="eyebrow">DISCUSSION</p><h2>Reply Dataset</h2></div><div class="count-badge"><strong id="reply-count">0</strong><span>replies</span></div></div>
+          <div id="reply-summary" class="empty-state">Collect a tweet conversation to inspect its replies. ML analysis will connect through the future Python worker.</div>
+        </section>
+      </div>
+    </section>
+
+    <section id="tab-account-info" class="tab-panel">
+      <div class="analysis-layout">
+        <aside class="control-panel">
+          <p class="eyebrow">ACCOUNT INTELLIGENCE</p>
+          <h2>Account Info</h2>
+          <label for="account-input">X username</label>
+          <input id="account-input" placeholder="@username">
+          <button id="account-button" class="primary">Get Account Info</button>
+          <button id="account-excel" class="secondary" disabled>Export Excel</button>
+          <button id="account-pdf" class="secondary" disabled>Export PDF Report</button>
+          <p id="account-status" class="status-line">Ready</p>
+        </aside>
+        <div class="divider"></div>
+        <section id="account-content" class="content-panel"><div class="empty-state">Account details will appear here.</div></section>
+      </div>
+    </section>
+
+    <section id="tab-investigation" class="tab-panel">
+      <div class="investigation-stage">
+        <div class="graph-toolbar"><button class="secondary">Fit graph</button><button class="secondary">Reset</button><span>Maltego-style entity graph foundation</span></div>
+        <div class="graph-canvas">
+          <div class="node root-node">Tweet</div>
+          <div class="graph-edge left-edge"></div><div class="node author-node">Author</div>
+          <div class="graph-edge right-edge"></div><div class="node metrics-node">Metrics</div>
+          <p>This workspace is ready for follower, following, liker, reply, repost, mention, hashtag and URL transforms.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="details-dialog" class="modal"><div class="modal-card wide"><header><div><p class="eyebrow" id="dialog-eyebrow">DETAILS</p><h2 id="dialog-title">Record</h2></div><button class="icon-button" data-close>×</button></header><div id="dialog-body" class="modal-body"></div></div></dialog>
+  <dialog id="progress-dialog" class="modal"><div class="modal-card progress-card"><p class="eyebrow">PROCESS</p><h2 id="progress-title">Preparing export</h2><div class="progress-track"><div id="dialog-progress" class="progress-fill"></div></div><p id="dialog-status" class="status-line">Preparing…</p></div></dialog>
+  <dialog id="logs-dialog" class="modal"><div class="modal-card wide logs-card"><header><div><p class="eyebrow">ACTIVITY</p><h2>Application Logs</h2></div><button class="icon-button" data-close>×</button></header><textarea id="logs-output" readonly></textarea></div></dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
