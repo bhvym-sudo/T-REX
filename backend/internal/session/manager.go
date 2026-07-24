@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -221,6 +222,176 @@ func (m *Manager) DiscoverGraphQLOperation(ctx context.Context, operation, navig
 		m.logger.Info(fmt.Sprintf("Discovered successful current %s query ID: %s", operation, metadata.QueryID))
 		return metadata, nil
 	}
+}
+
+func (m *Manager) CollectGraphQLByScrolling(
+	ctx context.Context,
+	operation, navigationURL string,
+	onPayload func(map[string]any),
+	onStatus func(round int),
+) error {
+	if !m.capturing.CompareAndSwap(false, true) {
+		return errors.New("browser session operation is already running")
+	}
+	defer m.capturing.Store(false)
+	edge, err := findEdge()
+	if err != nil {
+		return err
+	}
+	port, err := availablePort()
+	if err != nil {
+		return err
+	}
+	args := []string{
+		fmt.Sprintf("--remote-debugging-port=%d", port),
+		"--remote-debugging-address=127.0.0.1",
+		"--user-data-dir=" + m.profileDir,
+		"--headless=new",
+		"--disable-gpu",
+		"--disable-extensions",
+		"--disable-notifications",
+		"--disable-component-update",
+		"--no-first-run",
+		"--no-default-browser-check",
+		"about:blank",
+	}
+	cmd := exec.CommandContext(ctx, edge, args...)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("open headless Edge search transport: %w", err)
+	}
+	defer func() {
+		if cmd.Process != nil && cmd.ProcessState == nil {
+			_ = cmd.Process.Kill()
+		}
+	}()
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(12 * time.Minute)
+	targetDeadline := time.Now().Add(30 * time.Second)
+	var target debuggerTarget
+	for time.Now().Before(targetDeadline) {
+		target, _ = findPageTarget(client, port)
+		if target.WebSocketDebuggerURL != "" {
+			break
+		}
+		time.Sleep(350 * time.Millisecond)
+	}
+	if target.WebSocketDebuggerURL == "" {
+		return errors.New("could not connect to the headless Edge search transport")
+	}
+	conn, _, err := websocket.DefaultDialer.Dial(target.WebSocketDebuggerURL, nil)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	type cdpMessage map[string]any
+	messages := make(chan cdpMessage, 256)
+	readErrors := make(chan error, 1)
+	go func() {
+		for {
+			var message cdpMessage
+			if err := conn.ReadJSON(&message); err != nil {
+				readErrors <- err
+				return
+			}
+			messages <- message
+		}
+	}()
+
+	var idSequence atomic.Int64
+	var writeMu sync.Mutex
+	send := func(method string, params map[string]any) int {
+		id := int(idSequence.Add(1))
+		message := map[string]any{"id": id, "method": method}
+		if params != nil {
+			message["params"] = params
+		}
+		writeMu.Lock()
+		_ = conn.WriteJSON(message)
+		writeMu.Unlock()
+		return id
+	}
+	send("Network.enable", nil)
+	send("Network.setCacheDisabled", map[string]any{"cacheDisabled": true})
+	send("Page.enable", nil)
+	send("Page.navigate", map[string]any{"url": navigationURL})
+
+	pendingBodies := map[int]string{}
+	scrollTicker := time.NewTicker(850 * time.Millisecond)
+	defer scrollTicker.Stop()
+	round := 0
+	lastResponseRound := 0
+	receivedResponses := 0
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			send("Browser.close", nil)
+			return ctx.Err()
+		case err := <-readErrors:
+			if receivedResponses > 0 {
+				return nil
+			}
+			return fmt.Errorf("headless Edge search connection closed: %w", err)
+		case message := <-messages:
+			if message["method"] == "Network.responseReceived" {
+				params, _ := message["params"].(map[string]any)
+				response, _ := params["response"].(map[string]any)
+				responseURL := fmt.Sprint(response["url"])
+				status, _ := number(response["status"])
+				if queryIDFromGraphQLURL(responseURL, operation) != "" && status >= 200 && status < 300 {
+					requestID := fmt.Sprint(params["requestId"])
+					commandID := send("Network.getResponseBody", map[string]any{"requestId": requestID})
+					pendingBodies[commandID] = requestID
+					lastResponseRound = round
+				}
+				continue
+			}
+			idValue, ok := number(message["id"])
+			if !ok {
+				continue
+			}
+			commandID := int(idValue)
+			if _, ok := pendingBodies[commandID]; !ok {
+				continue
+			}
+			delete(pendingBodies, commandID)
+			result, _ := message["result"].(map[string]any)
+			body := fmt.Sprint(result["body"])
+			if encoded, _ := result["base64Encoded"].(bool); encoded {
+				if decoded, err := base64.StdEncoding.DecodeString(body); err == nil {
+					body = string(decoded)
+				}
+			}
+			payload := map[string]any{}
+			if json.Unmarshal([]byte(body), &payload) == nil {
+				receivedResponses++
+				if onPayload != nil {
+					onPayload(payload)
+				}
+			}
+		case <-scrollTicker.C:
+			round++
+			if onStatus != nil {
+				onStatus(round)
+			}
+			send("Runtime.evaluate", map[string]any{
+				"expression": "window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));",
+			})
+			if round >= 18 && round-lastResponseRound >= 16 && len(pendingBodies) == 0 {
+				send("Browser.close", nil)
+				time.Sleep(350 * time.Millisecond)
+				if receivedResponses == 0 {
+					return errors.New("X loaded no successful SearchTimeline responses in browser fallback")
+				}
+				return nil
+			}
+			if round >= 500 {
+				send("Browser.close", nil)
+				return nil
+			}
+		}
+	}
+	return errors.New("headless Edge search transport timed out")
 }
 
 func (m *Manager) LaunchAndCapture(ctx context.Context, onStatus func(string, int)) error {

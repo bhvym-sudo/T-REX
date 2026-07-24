@@ -99,6 +99,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/scan", s.startScan)
 	mux.HandleFunc("GET /api/posts", s.posts)
 	mux.HandleFunc("POST /api/account", s.account)
+	mux.HandleFunc("POST /api/tweet/detail", s.tweetDetail)
 	mux.HandleFunc("POST /api/replies", s.startReplies)
 	mux.HandleFunc("GET /api/replies/{jobID}", s.replyResult)
 	mux.HandleFunc("GET /api/jobs/{jobID}", s.job)
@@ -216,6 +217,25 @@ func (s *Server) account(w http.ResponseWriter, r *http.Request) {
 	s.store.SetAccount(key, account)
 	s.logger.Info("Account lookup completed for @" + account.ScreenName)
 	writeJSON(w, http.StatusOK, account)
+}
+
+func (s *Server) tweetDetail(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Tweet string `json:"tweet"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.logger.Info("Tweet detail lookup started for " + input.Tweet)
+	record, err := s.x.TweetDetail(r.Context(), input.Tweet)
+	if err != nil {
+		s.logger.Error("Tweet detail lookup failed: " + err.Error())
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.logger.Info("Tweet detail lookup completed for tweet " + record.Tweet.ID)
+	writeJSON(w, http.StatusOK, record)
 }
 
 func (s *Server) startReplies(w http.ResponseWriter, r *http.Request) {
@@ -547,7 +567,7 @@ func EnsureConfig(paths app.Paths) error {
 	}
 	return os.WriteFile(paths.QueryIDs, []byte(`{
   "SearchTimeline": "hz_94eVAtrtQo_vO3my7Rw",
-  "TweetDetail": "rZA6K31W4E90vZKBmxXV3g",
+  "TweetDetail": "Lq1caG5YPcdhpTdS2ZRx7Q",
   "TweetResultByRestId": "4hhGRbehkcUVTKf8n0f0xw",
   "UserByScreenName": "2qvSHpkWTMS9i0zJAwDNiA",
   "AboutAccountQuery": "TzOG2twZEfhr9KmClvVVqA"

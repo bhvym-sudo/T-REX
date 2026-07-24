@@ -115,16 +115,14 @@
           <h2>Tweet Analysis</h2>
           <label for="tweet-input">Tweet URL or ID</label>
           <input id="tweet-input" placeholder="https://x.com/user/status/…">
-          <label for="reply-limit">Maximum accessible replies</label>
-          <input id="reply-limit" type="number" min="1" max="10000" value="5000">
-          <button id="reply-button" class="primary">Collect Replies</button>
+          <button id="tweet-detail-button" class="primary">Get Tweet Details</button>
           <div class="progress-track compact"><div id="reply-progress" class="progress-fill"></div></div>
           <p id="reply-status" class="status-line">Ready</p>
         </aside>
         <div class="divider"></div>
         <section class="content-panel">
-          <div class="section-heading"><div><p class="eyebrow">DISCUSSION</p><h2>Reply Dataset</h2></div><div class="count-badge"><strong id="reply-count">0</strong><span>replies</span></div></div>
-          <div id="reply-summary" class="empty-state">Collect a tweet conversation to inspect its replies. ML analysis will connect through the future Python worker.</div>
+          <div class="section-heading"><div><p class="eyebrow">TWEETDETAIL</p><h2>Tweet Intelligence</h2></div></div>
+          <div id="tweet-detail-content" class="empty-state">Enter a tweet URL or ID to retrieve its complete TweetDetail record.</div>
         </section>
       </div>
     </section>

@@ -38,6 +38,11 @@ type Post struct {
 	Raw          map[string]any `json:"raw,omitempty"`
 }
 
+type TweetDetailRecord struct {
+	Tweet    Post      `json:"tweet"`
+	Sections []Section `json:"sections"`
+}
+
 type AccountRecord struct {
 	ScreenName string         `json:"screenName"`
 	Name       string         `json:"name"`

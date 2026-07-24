@@ -2,10 +2,9 @@ const state = {
   backendURL: "http://127.0.0.1:8787",
   ws: null,
   currentJob: "",
-  replyJob: "",
+  tweetDetail: null,
   posts: [],
   account: null,
-  replies: null,
   trackerJob: "",
   trackerPosts: [],
   logs: [],
@@ -38,7 +37,7 @@ function bindUI() {
   $("#account-button").addEventListener("click", lookupAccount);
   $("#account-excel").addEventListener("click", exportCurrentAccount);
   $("#account-pdf").addEventListener("click", exportAccountPDF);
-  $("#reply-button").addEventListener("click", collectReplies);
+  $("#tweet-detail-button").addEventListener("click", loadTweetDetail);
   window.trexDesktop.onMenuAction(handleMenuAction);
 }
 
@@ -254,7 +253,7 @@ function renderPosts(posts, total) {
       <div class="post-header"><span class="post-author">@${escapeHTML(username)}</span><span class="post-time">${escapeHTML(post.createdAt || "")}</span></div>
       <div class="post-text">${escapeHTML(post.text || "")}</div>
       <div class="post-actions">
-        <button data-action="comments">Comments Analysis</button>
+        <button data-action="comments">Tweet Analysis</button>
         <button disabled title="Python ML worker is intentionally outside this milestone">ML Analysis</button>
         <button data-action="author">About Author</button>
         <button data-action="details">Show more</button>
@@ -278,7 +277,7 @@ async function handlePostAction(id, event) {
   if (action === "comments") {
     $("#tweet-input").value = post.url || post.id;
     activateTab("tweet-analysis");
-    await collectReplies();
+    await loadTweetDetail();
   }
 }
 
@@ -317,44 +316,41 @@ function sectionHTML(section) {
   ).join("")}</section>`;
 }
 
-async function collectReplies() {
+async function loadTweetDetail() {
   const tweet = $("#tweet-input").value.trim();
   if (!tweet) return showError("Enter a tweet URL or ID.");
-  $("#reply-button").disabled = true;
-  setProgress("reply", 2, "Collecting replies first. ML is not running.");
+  $("#tweet-detail-button").disabled = true;
+  setProgress("reply", 12, "Calling TweetDetail for the focal tweet...");
   try {
-    const response = await api("/api/replies", {
+    state.tweetDetail = await api("/api/tweet/detail", {
       method: "POST",
-      body: { tweet, maxReplies: Number($("#reply-limit").value) || 5000 }
+      body: { tweet }
     });
-    state.replyJob = response.jobId;
-    const result = await watchJob(response.jobId, job => {
-      setProgress("reply", job.progress, job.message);
-      $("#reply-count").textContent = job.count;
-    });
-    state.replies = await api(`/api/replies/${response.jobId}`);
-    renderReplySummary(state.replies);
-    setProgress("reply", 100, result.message);
+    renderTweetDetail(state.tweetDetail);
+    setProgress("reply", 100, "Tweet details loaded.");
   } catch (error) {
     setProgress("reply", 0, error.message);
     showError(error.message);
   } finally {
-    $("#reply-button").disabled = false;
+    $("#tweet-detail-button").disabled = false;
   }
 }
 
-function renderReplySummary(result) {
-  $("#reply-count").textContent = result.replies.length;
-  const tweet = result.tweet || {};
-  const previews = result.replies.slice(0, 12).map(reply => `
-    <article class="post-card"><div class="post-header"><span class="post-author">@${escapeHTML(reply.author?.screen_name || "unknown")}</span><span class="post-time">${escapeHTML(reply.createdAt || "")}</span></div><div class="post-text">${escapeHTML(reply.text || "")}</div></article>
-  `).join("");
-  $("#reply-summary").className = "";
-  $("#reply-summary").innerHTML = `
-    <div class="account-header"><div class="mini-mark">T</div><div><p class="eyebrow">FOCAL TWEET</p><h2>@${escapeHTML(tweet.author?.screen_name || "unknown")}</h2><p>${escapeHTML(tweet.text || "")}</p></div></div>
-    <div class="section-heading" style="margin-top:20px"><div><p class="eyebrow">PREVIEW</p><h2>Accessible Replies</h2></div></div>
-    <div class="posts-list">${previews}</div>
-    <p class="hint">The full reply dataset is retained for export. Sentiment, emotion, toxicity and NER will be added by the separate Python ML worker.</p>`;
+function renderTweetDetail(record) {
+  const tweet = record.tweet || {};
+  const username = tweet.author?.screen_name || "unknown";
+  const avatar = tweet.author?.profile_image_url;
+  $("#tweet-detail-content").className = "";
+  $("#tweet-detail-content").innerHTML = `
+    <div class="account-header">
+      ${avatar ? `<img class="account-avatar" src="${escapeAttribute(avatar)}">` : '<div class="mini-mark">T</div>'}
+      <div>
+        <p class="eyebrow">FOCAL TWEET · ${escapeHTML(tweet.id || "")}</p>
+        <h2>@${escapeHTML(username)}</h2>
+        <p>${escapeHTML(tweet.text || "")}</p>
+      </div>
+    </div>
+    <div class="details-grid">${(record.sections || []).map(section => sectionHTML(section)).join("")}</div>`;
 }
 
 async function handleMenuAction(action) {

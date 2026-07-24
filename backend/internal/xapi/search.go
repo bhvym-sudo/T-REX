@@ -50,6 +50,9 @@ func (c *Client) Search(ctx context.Context, request model.ScanRequest, progress
 		}
 		payload, headers, err := c.doSearchRequestWithRetry(ctx, variables, activeFeatures, activeFieldToggles, referer, activeHeaders)
 		if err != nil && !refreshedQueryID && strings.Contains(err.Error(), "404") {
+			if len(activeHeaders) > 0 {
+				return c.searchWithBrowser(ctx, query, referer, maxPosts, progress)
+			}
 			if progress != nil {
 				progress("SearchTimeline metadata changed. Refreshing the current operation ID from X…", 3, nil)
 			}
@@ -61,6 +64,9 @@ func (c *Client) Search(ctx context.Context, request model.ScanRequest, progress
 			variables = buildSearchVariables(templateVariables, query, product, cursor)
 			time.Sleep(1200 * time.Millisecond)
 			payload, headers, err = c.doSearchRequestWithRetry(ctx, variables, activeFeatures, activeFieldToggles, referer, activeHeaders)
+		}
+		if err != nil && strings.Contains(err.Error(), "404") {
+			return c.searchWithBrowser(ctx, query, referer, maxPosts, progress)
 		}
 		if err != nil {
 			return posts, err
@@ -100,6 +106,45 @@ func (c *Client) Search(ctx context.Context, request model.ScanRequest, progress
 			break
 		}
 		time.Sleep(450 * time.Millisecond)
+	}
+	sort.SliceStable(posts, func(i, j int) bool { return posts[i].CreatedAt > posts[j].CreatedAt })
+	if progress != nil {
+		progress(fmt.Sprintf("Scan complete · %d unique post(s)", len(posts)), 100, nil)
+	}
+	return posts, nil
+}
+
+func (c *Client) searchWithBrowser(
+	ctx context.Context,
+	query, referer string,
+	maxPosts int,
+	progress SearchProgress,
+) ([]model.Post, error) {
+	if progress != nil {
+		progress("Direct SearchTimeline replay was rejected. Switching to the hidden authenticated browser transport…", 4, nil)
+	}
+	c.logger.Info("SearchTimeline direct replay rejected; using headless authenticated browser transport")
+	seen := map[string]bool{}
+	posts := make([]model.Post, 0, 256)
+	err := c.session.CollectGraphQLByScrolling(ctx, "SearchTimeline", referer, func(payload map[string]any) {
+		for _, post := range ExtractPosts(payload, query) {
+			if post.ID == "" || seen[post.ID] || len(posts) >= maxPosts {
+				continue
+			}
+			seen[post.ID] = true
+			posts = append(posts, post)
+			if progress != nil {
+				copy := post
+				progress(fmt.Sprintf("Extracted %d post(s) through hidden browser transport", len(posts)), min(94, 4+len(posts)/10), &copy)
+			}
+		}
+	}, func(round int) {
+		if progress != nil {
+			progress(fmt.Sprintf("Loading more SearchTimeline results · scroll %d · %d post(s)", round, len(posts)), min(94, 5+round/5), nil)
+		}
+	})
+	if err != nil {
+		return posts, err
 	}
 	sort.SliceStable(posts, func(i, j int) bool { return posts[i].CreatedAt > posts[j].CreatedAt })
 	if progress != nil {
