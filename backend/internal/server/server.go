@@ -19,6 +19,7 @@ import (
 	"trex/backend/internal/exporter"
 	"trex/backend/internal/logging"
 	"trex/backend/internal/model"
+	"trex/backend/internal/searchworker"
 	"trex/backend/internal/session"
 	"trex/backend/internal/store"
 	"trex/backend/internal/xapi"
@@ -31,6 +32,7 @@ type Server struct {
 	store    *store.Store
 	session  *session.Manager
 	x        *xapi.Client
+	search   *searchworker.Collector
 	http     *http.Server
 	sequence atomic.Uint64
 	mu       sync.Mutex
@@ -63,7 +65,8 @@ func New(paths app.Paths) (*Server, error) {
 	}
 	server := &Server{
 		paths: paths, logger: logger, hub: hub, store: store.New(),
-		session: manager, x: client, cancels: map[string]context.CancelFunc{},
+		session: manager, x: client, search: searchworker.New(paths.Root, paths.SessionDir),
+		cancels: map[string]context.CancelFunc{},
 		replies: map[string]replyResult{},
 	}
 	mux := http.NewServeMux()
@@ -163,7 +166,16 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info(fmt.Sprintf("Scan started · mode=%s · result=%s · dates=%s to %s", request.Mode, request.ResultMode, request.FromDate, request.ToDate))
 	go func() {
 		defer s.forgetCancel(jobID)
-		posts, err := s.x.Search(ctx, request, func(message string, progress int, post *model.Post) {
+		query, queryErr := xapi.BuildQuery(request)
+		if queryErr != nil {
+			s.updateJob(jobID, "failed", 100, "Scan failed", 0, queryErr.Error())
+			s.logger.Error("Scan failed: " + queryErr.Error())
+			return
+		}
+		posts, err := s.search.Collect(ctx, query, request.ResultMode, request.MaxPosts, func(message string, progress int, post *model.Post) {
+			if post == nil && strings.TrimSpace(message) != "" {
+				s.logger.Info("Scan progress · " + message)
+			}
 			count := len(s.store.Posts())
 			if post != nil && s.store.AddPost(*post) {
 				count++
@@ -403,7 +415,12 @@ func (s *Server) startTracker(w http.ResponseWriter, r *http.Request) {
 		cycle := 0
 		for {
 			cycle++
-			posts, err := s.x.Search(ctx, input.Request, nil)
+			query, queryErr := xapi.BuildQuery(input.Request)
+			if queryErr != nil {
+				s.updateJob(jobID, "failed", 100, "Tracker failed", len(s.store.Posts()), queryErr.Error())
+				return
+			}
+			posts, err := s.search.Collect(ctx, query, input.Request.ResultMode, input.Request.MaxPosts, nil)
 			if err != nil {
 				s.updateJob(jobID, "failed", 100, "Tracker failed", len(s.store.Posts()), err.Error())
 				return
@@ -566,7 +583,6 @@ func EnsureConfig(paths app.Paths) error {
 		return nil
 	}
 	return os.WriteFile(paths.QueryIDs, []byte(`{
-  "SearchTimeline": "hz_94eVAtrtQo_vO3my7Rw",
   "TweetDetail": "Lq1caG5YPcdhpTdS2ZRx7Q",
   "TweetResultByRestId": "4hhGRbehkcUVTKf8n0f0xw",
   "UserByScreenName": "2qvSHpkWTMS9i0zJAwDNiA",

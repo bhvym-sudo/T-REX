@@ -30,11 +30,14 @@ function startBackend() {
   const target = backendCommand();
   if (!target) return;
   const root = dataRoot();
+  const pythonWorker = app.isPackaged
+    ? join(process.resourcesPath, "python_worker", "search_timeline.py")
+    : join(process.cwd(), "python_worker", "search_timeline.py");
   mkdirSync(root, { recursive: true });
   backend = spawn(target.command, target.args, {
     cwd: app.isPackaged ? root : process.cwd(),
     windowsHide: true,
-    env: { ...process.env, TREX_DATA_DIR: root },
+    env: { ...process.env, TREX_DATA_DIR: root, TREX_PYTHON_WORKER: pythonWorker },
     stdio: app.isPackaged ? "ignore" : "inherit"
   });
 }

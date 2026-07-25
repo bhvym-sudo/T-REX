@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"trex/backend/internal/logging"
@@ -18,16 +17,10 @@ import (
 )
 
 type Client struct {
-	mu                 sync.RWMutex
-	queryIDs           map[string]string
-	queryPath          string
-	searchVariables    map[string]any
-	searchFeatures     map[string]any
-	searchFieldToggles map[string]any
-	searchHeaders      map[string]string
-	session            *session.Manager
-	http               *http.Client
-	logger             *logging.Logger
+	queryIDs map[string]string
+	session  *session.Manager
+	http     *http.Client
+	logger   *logging.Logger
 }
 
 func New(queryPath string, manager *session.Manager, logger *logging.Logger) (*Client, error) {
@@ -40,9 +33,7 @@ func New(queryPath string, manager *session.Manager, logger *logging.Logger) (*C
 		return nil, fmt.Errorf("decode query IDs: %w", err)
 	}
 	client := &Client{
-		queryIDs: ids, queryPath: queryPath, session: manager, logger: logger,
-		searchVariables: map[string]any{}, searchFeatures: cloneAnyMap(searchFeatures),
-		searchFieldToggles: cloneAnyMap(searchFieldToggles), searchHeaders: map[string]string{},
+		queryIDs: ids, session: manager, logger: logger,
 		http: &http.Client{
 			Timeout: 60 * time.Second,
 			Transport: &http.Transport{
@@ -53,49 +44,10 @@ func New(queryPath string, manager *session.Manager, logger *logging.Logger) (*C
 			},
 		},
 	}
-	if metadata, ok := manager.Operation("SearchTimeline"); ok {
-		client.queryIDs["SearchTimeline"] = metadata.QueryID
-		client.searchVariables = cloneAnyMap(metadata.Variables)
-		client.searchFeatures = cloneAnyMap(metadata.Features)
-		client.searchFieldToggles = cloneAnyMap(metadata.FieldToggles)
-		client.searchHeaders = cloneStringMap(metadata.Headers)
-	}
 	return client, nil
 }
 
-func (c *Client) RefreshQueryID(ctx context.Context, operation, navigationURL string) (session.GraphQLOperation, error) {
-	metadata, err := c.session.DiscoverGraphQLOperation(ctx, operation, navigationURL)
-	if err != nil {
-		return session.GraphQLOperation{}, err
-	}
-	c.mu.Lock()
-	c.queryIDs[operation] = metadata.QueryID
-	if operation == "SearchTimeline" {
-		c.searchVariables = cloneAnyMap(metadata.Variables)
-		c.searchFeatures = cloneAnyMap(metadata.Features)
-		c.searchFieldToggles = cloneAnyMap(metadata.FieldToggles)
-		c.searchHeaders = cloneStringMap(metadata.Headers)
-	}
-	data, marshalErr := json.MarshalIndent(c.queryIDs, "", "  ")
-	c.mu.Unlock()
-	if marshalErr != nil {
-		return session.GraphQLOperation{}, marshalErr
-	}
-	if err := os.WriteFile(c.queryPath, data, 0o644); err != nil {
-		return session.GraphQLOperation{}, fmt.Errorf("save refreshed query ID: %w", err)
-	}
-	return metadata, nil
-}
-
-func (c *Client) SearchTemplate() (map[string]any, map[string]any, map[string]any, map[string]string) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return cloneAnyMap(c.searchVariables), cloneAnyMap(c.searchFeatures), cloneAnyMap(c.searchFieldToggles), cloneStringMap(c.searchHeaders)
-}
-
 func (c *Client) QueryID(operation string) string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	return c.queryIDs[operation]
 }
 
@@ -238,14 +190,6 @@ func truncate(value string, length int) string {
 
 func cloneAnyMap(value map[string]any) map[string]any {
 	result := map[string]any{}
-	for key, item := range value {
-		result[key] = item
-	}
-	return result
-}
-
-func cloneStringMap(value map[string]string) map[string]string {
-	result := map[string]string{}
 	for key, item := range value {
 		result[key] = item
 	}

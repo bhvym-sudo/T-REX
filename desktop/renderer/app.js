@@ -8,7 +8,8 @@ const state = {
   trackerJob: "",
   trackerPosts: [],
   logs: [],
-  scanContext: null
+  scanContext: null,
+  sessionBootstrapRunning: false
 };
 
 const $ = selector => document.querySelector(selector);
@@ -28,7 +29,7 @@ async function initialize() {
 function bindUI() {
   $$(".tab").forEach(button => button.addEventListener("click", () => activateTab(button.dataset.tab)));
   $$("[data-close]").forEach(button => button.addEventListener("click", () => button.closest("dialog").close()));
-  $("#startup-action").addEventListener("click", bootstrapSession);
+  $("#startup-action").onclick = () => bootstrapSession(false);
   $("#scan-mode").addEventListener("change", updateScanMode);
   $("#custom-query").addEventListener("input", validateCustomQuery);
   $("#scan-button").addEventListener("click", startScan);
@@ -42,6 +43,8 @@ function bindUI() {
 }
 
 async function startupCheck() {
+  $("#startup-action").classList.add("hidden");
+  $("#startup-action").disabled = true;
   setProgress("startup", 12, "Starting Go backend…");
   let health = false;
   for (let attempt = 0; attempt < 25; attempt++) {
@@ -60,16 +63,11 @@ async function startupCheck() {
   setProgress("startup", 42, "Backend ready. Checking the X session…");
   const session = await api("/api/session/status");
   if (session.ready) {
-    setProgress("startup", 100, "X session ready.");
-    $("#session-label").textContent = session.screenName ? `@${session.screenName}` : "Session ready";
-    $("#startup-action").textContent = "Proceed to Workspace";
-    $("#startup-action").classList.remove("hidden");
-    $("#startup-action").onclick = openWorkspace;
+    showProceed(session);
     return;
   }
   setProgress("startup", 55, session.message);
-  $("#startup-action").textContent = "Open Microsoft Edge";
-  $("#startup-action").classList.remove("hidden");
+  await bootstrapSession(true);
 }
 
 function openWorkspace() {
@@ -77,20 +75,36 @@ function openWorkspace() {
   $("#workspace").classList.remove("hidden");
 }
 
-async function bootstrapSession() {
+function showProceed(session) {
+  setProgress("startup", 100, "X session ready.");
+  $("#session-label").textContent = session.screenName ? `@${session.screenName}` : "Session ready";
+  $("#startup-action").textContent = "Proceed to Workspace";
+  $("#startup-action").disabled = false;
+  $("#startup-action").classList.remove("hidden");
+  $("#startup-action").onclick = openWorkspace;
+}
+
+async function bootstrapSession(auto = false) {
+  if (state.sessionBootstrapRunning) return;
+  state.sessionBootstrapRunning = true;
   $("#startup-action").disabled = true;
+  if (auto) {
+    $("#startup-action").classList.add("hidden");
+  }
   try {
     const response = await api("/api/session/bootstrap", { method: "POST", body: {} });
     await watchJob(response.jobId, job => setProgress("startup", job.progress, job.message));
     const session = await api("/api/session/status");
     if (!session.ready) throw new Error("Session capture completed without the required X metadata.");
-    $("#startup-action").textContent = "Proceed to Workspace";
-    $("#startup-action").disabled = false;
-    $("#startup-action").onclick = openWorkspace;
-    $("#session-label").textContent = session.screenName ? `@${session.screenName}` : "Session ready";
+    showProceed(session);
   } catch (error) {
     setProgress("startup", 0, error.message);
+    $("#startup-action").textContent = "Open Microsoft Edge";
     $("#startup-action").disabled = false;
+    $("#startup-action").classList.remove("hidden");
+    $("#startup-action").onclick = () => bootstrapSession(false);
+  } finally {
+    state.sessionBootstrapRunning = false;
   }
 }
 
@@ -157,7 +171,7 @@ async function startScan() {
   $("#posts-list").innerHTML = '<div class="empty-state">Collecting from X…</div>';
   $("#post-count").textContent = "0";
   $("#scan-button").disabled = true;
-  setProgress("scan", 2, "Preparing direct SearchTimeline collection…");
+  setProgress("scan", 2, "Preparing authenticated headless X search…");
   try {
     const response = await api("/api/scan", { method: "POST", body: payload });
     state.currentJob = response.jobId;
@@ -196,7 +210,7 @@ async function startTracker() {
   };
   $("#tracker-start").disabled = true;
   $("#tracker-stop").disabled = false;
-  $("#tracker-status").textContent = "Starting direct API tracker…";
+  $("#tracker-status").textContent = "Starting authenticated headless X tracker…";
   state.trackerPosts = [];
   try {
     const response = await api("/api/tracker/start", { method: "POST", body: payload });

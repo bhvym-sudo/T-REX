@@ -31,6 +31,10 @@
       {
         "from": "bin/trex-backend.exe",
         "to": "backend/trex-backend.exe"
+      },
+      {
+        "from": "python_worker",
+        "to": "python_worker"
       }
     ],
     "win": {

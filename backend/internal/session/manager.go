@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,23 +69,32 @@ func New(runtimePath, profileDir string, logger *logging.Logger) *Manager {
 }
 
 func (m *Manager) Status() model.SessionStatus {
+	profileReady := m.profileHasSessionData()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	hasAuth := m.cookieLocked("auth_token") != ""
-	hasCSRF := m.cookieLocked("ct0") != ""
-	ready := hasAuth && hasCSRF && m.runtime.Bearer != ""
+	hasAuth := profileReady && m.cookieLocked("auth_token") != ""
+	hasCSRF := profileReady && m.cookieLocked("ct0") != ""
+	hasBearer := profileReady && m.runtime.Bearer != ""
+	ready := hasAuth && hasCSRF && hasBearer
 	message := "X session is ready."
 	if !ready {
-		message = "X session metadata is missing. Open Edge and sign in."
+		if !profileReady {
+			message = "No local X browser session was found. Opening Edge for login."
+		} else {
+			message = "X session metadata is missing. Open Edge and sign in."
+		}
 	}
 	return model.SessionStatus{
 		Ready: ready, ProfileDir: m.profileDir, ScreenName: m.runtime.ScreenName,
-		HasCookies: hasAuth && hasCSRF, HasBearer: m.runtime.Bearer != "",
+		HasCookies: hasAuth && hasCSRF, HasBearer: hasBearer,
 		LastUpdated: m.runtime.CapturedAt.Format(time.RFC3339), Message: message,
 	}
 }
 
 func (m *Manager) Runtime() (Runtime, error) {
+	if !m.profileHasSessionData() {
+		return Runtime{}, errors.New("local X browser session folder is missing or empty")
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if m.cookieLocked("auth_token") == "" || m.cookieLocked("ct0") == "" {
@@ -222,176 +230,6 @@ func (m *Manager) DiscoverGraphQLOperation(ctx context.Context, operation, navig
 		m.logger.Info(fmt.Sprintf("Discovered successful current %s query ID: %s", operation, metadata.QueryID))
 		return metadata, nil
 	}
-}
-
-func (m *Manager) CollectGraphQLByScrolling(
-	ctx context.Context,
-	operation, navigationURL string,
-	onPayload func(map[string]any),
-	onStatus func(round int),
-) error {
-	if !m.capturing.CompareAndSwap(false, true) {
-		return errors.New("browser session operation is already running")
-	}
-	defer m.capturing.Store(false)
-	edge, err := findEdge()
-	if err != nil {
-		return err
-	}
-	port, err := availablePort()
-	if err != nil {
-		return err
-	}
-	args := []string{
-		fmt.Sprintf("--remote-debugging-port=%d", port),
-		"--remote-debugging-address=127.0.0.1",
-		"--user-data-dir=" + m.profileDir,
-		"--headless=new",
-		"--disable-gpu",
-		"--disable-extensions",
-		"--disable-notifications",
-		"--disable-component-update",
-		"--no-first-run",
-		"--no-default-browser-check",
-		"about:blank",
-	}
-	cmd := exec.CommandContext(ctx, edge, args...)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("open headless Edge search transport: %w", err)
-	}
-	defer func() {
-		if cmd.Process != nil && cmd.ProcessState == nil {
-			_ = cmd.Process.Kill()
-		}
-	}()
-	client := &http.Client{Timeout: 2 * time.Second}
-	deadline := time.Now().Add(12 * time.Minute)
-	targetDeadline := time.Now().Add(30 * time.Second)
-	var target debuggerTarget
-	for time.Now().Before(targetDeadline) {
-		target, _ = findPageTarget(client, port)
-		if target.WebSocketDebuggerURL != "" {
-			break
-		}
-		time.Sleep(350 * time.Millisecond)
-	}
-	if target.WebSocketDebuggerURL == "" {
-		return errors.New("could not connect to the headless Edge search transport")
-	}
-	conn, _, err := websocket.DefaultDialer.Dial(target.WebSocketDebuggerURL, nil)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	type cdpMessage map[string]any
-	messages := make(chan cdpMessage, 256)
-	readErrors := make(chan error, 1)
-	go func() {
-		for {
-			var message cdpMessage
-			if err := conn.ReadJSON(&message); err != nil {
-				readErrors <- err
-				return
-			}
-			messages <- message
-		}
-	}()
-
-	var idSequence atomic.Int64
-	var writeMu sync.Mutex
-	send := func(method string, params map[string]any) int {
-		id := int(idSequence.Add(1))
-		message := map[string]any{"id": id, "method": method}
-		if params != nil {
-			message["params"] = params
-		}
-		writeMu.Lock()
-		_ = conn.WriteJSON(message)
-		writeMu.Unlock()
-		return id
-	}
-	send("Network.enable", nil)
-	send("Network.setCacheDisabled", map[string]any{"cacheDisabled": true})
-	send("Page.enable", nil)
-	send("Page.navigate", map[string]any{"url": navigationURL})
-
-	pendingBodies := map[int]string{}
-	scrollTicker := time.NewTicker(850 * time.Millisecond)
-	defer scrollTicker.Stop()
-	round := 0
-	lastResponseRound := 0
-	receivedResponses := 0
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			send("Browser.close", nil)
-			return ctx.Err()
-		case err := <-readErrors:
-			if receivedResponses > 0 {
-				return nil
-			}
-			return fmt.Errorf("headless Edge search connection closed: %w", err)
-		case message := <-messages:
-			if message["method"] == "Network.responseReceived" {
-				params, _ := message["params"].(map[string]any)
-				response, _ := params["response"].(map[string]any)
-				responseURL := fmt.Sprint(response["url"])
-				status, _ := number(response["status"])
-				if queryIDFromGraphQLURL(responseURL, operation) != "" && status >= 200 && status < 300 {
-					requestID := fmt.Sprint(params["requestId"])
-					commandID := send("Network.getResponseBody", map[string]any{"requestId": requestID})
-					pendingBodies[commandID] = requestID
-					lastResponseRound = round
-				}
-				continue
-			}
-			idValue, ok := number(message["id"])
-			if !ok {
-				continue
-			}
-			commandID := int(idValue)
-			if _, ok := pendingBodies[commandID]; !ok {
-				continue
-			}
-			delete(pendingBodies, commandID)
-			result, _ := message["result"].(map[string]any)
-			body := fmt.Sprint(result["body"])
-			if encoded, _ := result["base64Encoded"].(bool); encoded {
-				if decoded, err := base64.StdEncoding.DecodeString(body); err == nil {
-					body = string(decoded)
-				}
-			}
-			payload := map[string]any{}
-			if json.Unmarshal([]byte(body), &payload) == nil {
-				receivedResponses++
-				if onPayload != nil {
-					onPayload(payload)
-				}
-			}
-		case <-scrollTicker.C:
-			round++
-			if onStatus != nil {
-				onStatus(round)
-			}
-			send("Runtime.evaluate", map[string]any{
-				"expression": "window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));",
-			})
-			if round >= 18 && round-lastResponseRound >= 16 && len(pendingBodies) == 0 {
-				send("Browser.close", nil)
-				time.Sleep(350 * time.Millisecond)
-				if receivedResponses == 0 {
-					return errors.New("X loaded no successful SearchTimeline responses in browser fallback")
-				}
-				return nil
-			}
-			if round >= 500 {
-				send("Browser.close", nil)
-				return nil
-			}
-		}
-	}
-	return errors.New("headless Edge search transport timed out")
 }
 
 func (m *Manager) LaunchAndCapture(ctx context.Context, onStatus func(string, int)) error {
@@ -569,6 +407,9 @@ func (m *Manager) finishCapture(current Runtime, conn *websocket.Conn, cmd *exec
 	if err := m.save(); err != nil {
 		return err
 	}
+	if err := m.saveProfileMarker(current.CapturedAt); err != nil {
+		return err
+	}
 	if onStatus != nil {
 		onStatus("X session captured successfully. Closing Microsoft Edge.", 96)
 	}
@@ -605,6 +446,42 @@ func (m *Manager) save() error {
 		return err
 	}
 	return os.WriteFile(m.runtimePath, data, 0o600)
+}
+
+func (m *Manager) profileHasSessionData() bool {
+	if info, err := os.Stat(m.profileDir); err != nil || !info.IsDir() {
+		return false
+	}
+	if info, err := os.Stat(m.profileMarkerPath()); err != nil || info.IsDir() || info.Size() == 0 {
+		return false
+	}
+	for _, relative := range []string{
+		filepath.Join("Default", "Network", "Cookies"),
+		filepath.Join("Default", "Cookies"),
+	} {
+		path := filepath.Join(m.profileDir, relative)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Size() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) saveProfileMarker(capturedAt time.Time) error {
+	if err := os.MkdirAll(m.profileDir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(map[string]string{
+		"capturedAt": capturedAt.Format(time.RFC3339),
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(m.profileMarkerPath(), data, 0o600)
+}
+
+func (m *Manager) profileMarkerPath() string {
+	return filepath.Join(m.profileDir, ".trex-session.json")
 }
 
 func (m *Manager) cookieLocked(name string) string {
