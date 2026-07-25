@@ -34,12 +34,42 @@ The Go API listens on `127.0.0.1:8787`. Electron starts it automatically unless 
 
 ## Build
 
+Create the Go backend binary:
+
 ```powershell
-npm.cmd run build:backend
-npm.cmd run build:desktop
+go build -o bin\trex-backend.exe .\backend\cmd\trex
 ```
 
-Standalone desktop output is written under `release`.
+Create the Python SearchTimeline worker executable with Nuitka:
+
+```powershell
+python -m nuitka `
+  --standalone `
+  --onefile `
+  --windows-console-mode=disable `
+  --output-dir=python_worker `
+  --output-filename=search.exe `
+  --remove-output `
+  --include-package=playwright `
+  python_worker/search_timeline.py
+```
+
+Build the Windows setup:
+
+```powershell
+npm.cmd run dist
+```
+
+The setup output is written under `dist`.
+
+Production packages include the already-built binaries:
+
+- `bin/trex-backend.exe`
+- `python_worker/search.exe`
+- `assets/icon.png`
+- `assets/icon.ico`
+
+In development, Electron runs `python_worker/search_timeline.py` when it exists. If the Python source file is absent, Electron falls back to `python_worker/search.exe`, matching the production layout.
 
 ## Workspace data
 

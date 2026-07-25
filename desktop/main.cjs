@@ -1,14 +1,19 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const { existsSync, mkdirSync } = require("node:fs");
-const { dirname, join } = require("node:path");
+const { join } = require("node:path");
 
 let mainWindow;
 let backend;
 
 function dataRoot() {
   if (!app.isPackaged) return process.cwd();
-  return dirname(process.execPath);
+  return app.getPath("userData");
+}
+
+function iconPath() {
+  if (app.isPackaged) return join(process.resourcesPath, "assets", "icon.png");
+  return join(process.cwd(), "assets", "icon.png");
 }
 
 function backendCommand() {
@@ -26,18 +31,36 @@ function backendCommand() {
   return { command: "go", args: ["run", "./backend/cmd/trex"] };
 }
 
+function searchWorkerEnvironment() {
+  if (app.isPackaged) {
+    return {
+      TREX_SEARCH_WORKER_EXE: join(process.resourcesPath, "python_worker", "search.exe")
+    };
+  }
+
+  const sourceWorker = join(process.cwd(), "python_worker", "search_timeline.py");
+  if (existsSync(sourceWorker)) {
+    return { TREX_PYTHON_WORKER: sourceWorker };
+  }
+
+  const executableWorker = join(process.cwd(), "python_worker", "search.exe");
+  if (existsSync(executableWorker)) {
+    return { TREX_SEARCH_WORKER_EXE: executableWorker };
+  }
+
+  return { TREX_PYTHON_WORKER: sourceWorker };
+}
+
 function startBackend() {
   const target = backendCommand();
   if (!target) return;
   const root = dataRoot();
-  const pythonWorker = app.isPackaged
-    ? join(process.resourcesPath, "python_worker", "search_timeline.py")
-    : join(process.cwd(), "python_worker", "search_timeline.py");
+  const workerEnvironment = searchWorkerEnvironment();
   mkdirSync(root, { recursive: true });
   backend = spawn(target.command, target.args, {
     cwd: app.isPackaged ? root : process.cwd(),
     windowsHide: true,
-    env: { ...process.env, TREX_DATA_DIR: root, TREX_PYTHON_WORKER: pythonWorker },
+    env: { ...process.env, TREX_DATA_DIR: root, ...workerEnvironment },
     stdio: app.isPackaged ? "ignore" : "inherit"
   });
 }
@@ -51,6 +74,7 @@ function createWindow() {
     backgroundColor: "#101214",
     show: false,
     title: "T-REX OSINT",
+    icon: iconPath(),
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -104,7 +128,7 @@ function buildMenu() {
       ]
     }
   ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  Menu.setApplicationMenu(null);
 }
 
 ipcMain.handle("dialog:save", async (_event, options) => {

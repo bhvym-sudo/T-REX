@@ -6,13 +6,13 @@
   "author": "T-REX OSINT",
   "main": "desktop/main.cjs",
   "scripts": {
-    "start": "npm run build:backend && electron .",
+    "start": "electron .",
     "dev": "node scripts/dev.cjs",
     "start:backend": "go run ./backend/cmd/trex",
     "start:desktop": "electron .",
-    "build:backend": "node scripts/build-backend.cjs",
+    "build:worker": "python -m nuitka --standalone --onefile --windows-console-mode=disable --output-dir=python_worker --output-filename=search.exe --remove-output --include-package=playwright python_worker/search_timeline.py",
     "build:desktop": "electron-builder --dir",
-    "dist": "npm run build:backend && electron-builder"
+    "dist": "electron-builder --win nsis"
   },
   "devDependencies": {
     "electron": "^37.2.3",
@@ -24,7 +24,6 @@
     "asar": true,
     "files": [
       "desktop/**/*",
-      "bin/trex-backend.exe",
       "package.json"
     ],
     "extraResources": [
@@ -33,13 +32,37 @@
         "to": "backend/trex-backend.exe"
       },
       {
-        "from": "python_worker",
-        "to": "python_worker"
+        "from": "python_worker/search.exe",
+        "to": "python_worker/search.exe"
+      },
+      {
+        "from": "assets/icon.png",
+        "to": "assets/icon.png"
+      },
+      {
+        "from": "assets/icon.ico",
+        "to": "assets/icon.ico"
       }
     ],
     "win": {
-      "target": "dir",
-      "artifactName": "T-REX-OSINT-${version}-${arch}.${ext}"
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "T-REX-OSINT-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "T-REX OSINT"
     }
   }
 }

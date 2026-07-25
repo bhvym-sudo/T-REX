@@ -71,13 +71,15 @@ func (c *Collector) Collect(
 	if maxPosts <= 0 {
 		maxPosts = 5000
 	}
-	if _, err := os.Stat(c.scriptPath); err != nil {
-		return nil, fmt.Errorf("Python SearchTimeline worker is missing at %s", c.scriptPath)
-	}
 
 	command, arguments, err := c.command()
 	if err != nil {
 		return nil, err
+	}
+	if fileExists(command) {
+		// Explicit file path, already verified.
+	} else if _, err := exec.LookPath(command); err != nil {
+		return nil, fmt.Errorf("SearchTimeline worker command is missing: %s", command)
 	}
 	cmd := exec.CommandContext(ctx, command, arguments...)
 	configureProcess(cmd)
@@ -201,10 +203,19 @@ func (c *Collector) Collect(
 
 func (c *Collector) command() (string, []string, error) {
 	if executable := strings.TrimSpace(os.Getenv("TREX_SEARCH_WORKER_EXE")); executable != "" {
+		if !fileExists(executable) {
+			return "", nil, fmt.Errorf("SearchTimeline worker executable is missing at %s", executable)
+		}
 		return executable, []string{"--profile", c.profileDir}, nil
 	}
 	if executable := filepath.Join(filepath.Dir(c.scriptPath), "search_timeline.exe"); fileExists(executable) {
 		return executable, []string{"--profile", c.profileDir}, nil
+	}
+	if executable := filepath.Join(filepath.Dir(c.scriptPath), "search.exe"); fileExists(executable) {
+		return executable, []string{"--profile", c.profileDir}, nil
+	}
+	if _, err := os.Stat(c.scriptPath); err != nil {
+		return "", nil, fmt.Errorf("Python SearchTimeline worker is missing at %s", c.scriptPath)
 	}
 	if configured := strings.TrimSpace(os.Getenv("TREX_PYTHON")); configured != "" {
 		return configured, []string{"-u", c.scriptPath, "--profile", c.profileDir}, nil
