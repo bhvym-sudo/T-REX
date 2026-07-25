@@ -34,8 +34,8 @@ h3 { font-size: 15px; }
 
 .startup-screen { height: 100%; display: grid; place-items: center; background: radial-gradient(circle at 50% 28%, #1c2024 0, #101214 48%, #0d0f11 100%); }
 .startup-shell { width: min(530px, 82vw); text-align: center; }
-.brand-mark, .mini-mark { display: inline-grid; place-items: center; border: 1px solid #525b64; background: linear-gradient(145deg, #2d3339, #191d21); color: #f8fafb; font-family: Georgia, serif; }
-.brand-mark { width: 70px; height: 70px; margin-bottom: 24px; border-radius: 17px; font-size: 38px; box-shadow: 0 18px 60px #0007; }
+.brand-mark, .mini-mark { display: inline-block; border: 1px solid #525b64; background: #191d21; object-fit: cover; }
+.brand-mark { width: 70px; height: 70px; margin-bottom: 24px; border-radius: 17px; box-shadow: 0 18px 60px #0007; }
 .startup-copy { max-width: 440px; margin: 0 auto 26px; color: var(--muted); line-height: 1.65; }
 .status-line { min-height: 20px; margin: 10px 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 
@@ -48,7 +48,8 @@ h3 { font-size: 15px; }
 .brand-lockup { display: flex; align-items: center; gap: 10px; }
 .brand-lockup strong { display: block; font-size: 13px; letter-spacing: .04em; }
 .brand-lockup small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
-.mini-mark { width: 30px; height: 30px; border-radius: 7px; font-size: 17px; }
+.mini-mark { width: 30px; height: 30px; border-radius: 7px; }
+.app-logo { vertical-align: middle; }
 .session-pill { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; color: #bdc4ca; font-size: 11px; }
 .session-pill span { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 10px #82b39488; }
 

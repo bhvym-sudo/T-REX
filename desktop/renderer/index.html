@@ -9,7 +9,7 @@
 <body>
   <section id="startup" class="startup-screen">
     <div class="startup-shell">
-      <div class="brand-mark">T</div>
+      <img class="brand-mark app-logo" src="../../assets/icon.png" alt="T-REX OSINT">
       <p class="eyebrow">SOCIAL INTELLIGENCE WORKSTATION</p>
       <h1>T-REX OSINT</h1>
       <p class="startup-copy">Preparing the collection engine and checking the authenticated X workspace.</p>
@@ -22,7 +22,7 @@
   <main id="workspace" class="workspace hidden">
     <header class="app-header">
       <div class="brand-lockup">
-        <span class="mini-mark">T</span>
+        <img class="mini-mark app-logo" src="../../assets/icon.png" alt="T-REX OSINT">
         <div><strong>T-REX OSINT</strong><small>Analyst workspace</small></div>
       </div>
       <div class="session-pill"><span></span><b id="session-label">Session ready</b></div>
@@ -51,6 +51,9 @@
           <label><input type="radio" name="resultMode" value="latest" checked><span>Latest</span></label>
           <label><input type="radio" name="resultMode" value="top"><span>Top</span></label>
         </div>
+        <label for="max-posts">Maximum posts</label>
+        <select id="max-posts"></select>
+        <p id="max-posts-warning" class="hint rate-warning">Higher limits can trigger X API rate limits. Use smaller batches for repeated scans.</p>
         <div id="standard-query-fields">
           <label id="terms-label" for="terms-input">Keywords</label>
           <textarea id="terms-input" rows="3" placeholder="Enter values separated by commas"></textarea>

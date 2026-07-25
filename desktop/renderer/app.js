@@ -21,6 +21,7 @@ async function initialize() {
   const info = await window.trexDesktop.appInfo();
   state.backendURL = info.backendURL;
   setDefaultDates();
+  populateMaxPosts();
   bindUI();
   connectEvents();
   await startupCheck();
@@ -31,6 +32,7 @@ function bindUI() {
   $$("[data-close]").forEach(button => button.addEventListener("click", () => button.closest("dialog").close()));
   $("#startup-action").onclick = () => bootstrapSession(false);
   $("#scan-mode").addEventListener("change", updateScanMode);
+  $("#max-posts").addEventListener("change", updateMaxPostsWarning);
   $("#custom-query").addEventListener("input", validateCustomQuery);
   $("#scan-button").addEventListener("click", startScan);
   $("#tracker-start").addEventListener("click", startTracker);
@@ -164,7 +166,7 @@ async function startScan() {
     customQuery: $("#custom-query").value.trim(),
     fromDate: $("#from-date").value,
     toDate: $("#to-date").value,
-    maxPosts: 5000
+    maxPosts: Number($("#max-posts").value) || 500
   };
   state.scanContext = payload;
   state.posts = [];
@@ -357,7 +359,7 @@ function renderTweetDetail(record) {
   $("#tweet-detail-content").className = "";
   $("#tweet-detail-content").innerHTML = `
     <div class="account-header">
-      ${avatar ? `<img class="account-avatar" src="${escapeAttribute(avatar)}">` : '<div class="mini-mark">T</div>'}
+      ${avatar ? `<img class="account-avatar" src="${escapeAttribute(avatar)}">` : '<img class="mini-mark app-logo" src="../../assets/icon.png" alt="T-REX OSINT">'}
       <div>
         <p class="eyebrow">FOCAL TWEET · ${escapeHTML(tweet.id || "")}</p>
         <h2>@${escapeHTML(username)}</h2>
@@ -552,6 +554,30 @@ function setDefaultDates() {
   before.setDate(today.getDate() - 7);
   $("#to-date").value = today.toISOString().slice(0, 10);
   $("#from-date").value = before.toISOString().slice(0, 10);
+}
+
+function populateMaxPosts() {
+  const select = $("#max-posts");
+  const limits = [];
+  for (let value = 20; value <= 5000; value += 20) limits.push(value);
+  select.innerHTML = limits.map(value => `<option value="${value}">${value.toLocaleString()} posts</option>`).join("");
+  select.value = "500";
+  updateMaxPostsWarning();
+}
+
+function updateMaxPostsWarning() {
+  const limit = Number($("#max-posts").value) || 500;
+  const warning = $("#max-posts-warning");
+  if (limit >= 1000) {
+    warning.textContent = "High scan limit selected. Large repeated scans can trigger X rate limits; let the account rest between runs.";
+    warning.style.color = "var(--warning)";
+  } else if (limit >= 500) {
+    warning.textContent = "Medium scan limit selected. Repeated scans may still hit X rate limits.";
+    warning.style.color = "var(--warning)";
+  } else {
+    warning.textContent = "Lower limits reduce rate-limit risk and are better for repeated searches.";
+    warning.style.color = "var(--subtle)";
+  }
 }
 
 function selected(name) {

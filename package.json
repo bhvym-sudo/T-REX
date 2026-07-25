@@ -24,6 +24,7 @@
     "asar": true,
     "files": [
       "desktop/**/*",
+      "assets/**/*",
       "package.json"
     ],
     "extraResources": [

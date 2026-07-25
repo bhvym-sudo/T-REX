@@ -151,6 +151,7 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	request.MaxPosts = normalizeScanLimit(request.MaxPosts)
 	if _, err := xapi.BuildQuery(request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -163,6 +164,7 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.rememberCancel(jobID, cancel)
 	s.store.ResetPosts()
+	s.logger.Info(fmt.Sprintf("Scan post limit set to %d", request.MaxPosts))
 	s.logger.Info(fmt.Sprintf("Scan started · mode=%s · result=%s · dates=%s to %s", request.Mode, request.ResultMode, request.FromDate, request.ToDate))
 	go func() {
 		defer s.forgetCancel(jobID)
@@ -195,6 +197,19 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 		s.logger.Info(fmt.Sprintf("Scan completed · %d unique posts", len(posts)))
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]string{"jobId": jobID})
+}
+
+func normalizeScanLimit(limit int) int {
+	if limit <= 0 {
+		return 500
+	}
+	if limit < 20 {
+		return 20
+	}
+	if limit > 5000 {
+		return 5000
+	}
+	return (limit / 20) * 20
 }
 
 func (s *Server) posts(w http.ResponseWriter, r *http.Request) {

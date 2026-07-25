@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import os
+import random
 import sys
 from collections import deque
 from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
@@ -13,6 +14,10 @@ def emit(event_type, **values):
     message = {"type": event_type, **values}
     sys.stdout.write(json.dumps(message, separators=(",", ":"), ensure_ascii=True) + "\n")
     sys.stdout.flush()
+
+
+async def rate_delay(min_seconds=2.0, max_seconds=4.0):
+    await asyncio.sleep(random.uniform(min_seconds, max_seconds))
 
 
 def tweet_ids(payload):
@@ -338,7 +343,7 @@ async def collect(request, profile_dir):
                         )
                         break
                     fetched += 1
-                    await asyncio.sleep(0.8)
+                    await rate_delay(1.5, 3.0)
                     continue
 
                 added_posts, _ = await ingest(payload, f"{cursor['type']} cursor")
@@ -352,7 +357,7 @@ async def collect(request, profile_dir):
                     empty_pages = 0
                 if empty_pages >= empty_limit:
                     break
-                await asyncio.sleep(0.65)
+                await rate_delay(1.2, 2.4)
             return total_added
 
         page.on("response", schedule_response)
@@ -395,18 +400,20 @@ async def collect(request, profile_dir):
                 except Exception:
                     height = 0
 
-                await page.mouse.wheel(0, 5200)
+                for _ in range(4):
+                    await page.mouse.wheel(0, random.randint(850, 1450))
+                    await asyncio.sleep(random.uniform(0.25, 0.65))
                 if round_number % 8 == 0:
                     try:
                         await page.keyboard.press("End")
                     except Exception:
                         pass
-                await asyncio.sleep(1.15)
+                await rate_delay(2.0, 4.0)
                 try:
-                    await page.wait_for_load_state("networkidle", timeout=1800)
+                    await page.wait_for_load_state("networkidle", timeout=2800)
                 except Exception:
                     pass
-                await asyncio.sleep(0.35)
+                await rate_delay(0.8, 1.6)
                 await wait_pending()
                 await drain_cursors(limit=260, empty_limit=18)
                 await wait_pending()
