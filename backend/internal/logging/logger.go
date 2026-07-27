@@ -14,6 +14,7 @@ type Logger struct {
 	dir     string
 	file    *os.File
 	sink    func(level, message string)
+	closed  bool
 }
 
 func New(dir string) (*Logger, error) {
@@ -66,6 +67,13 @@ func (l *Logger) Entries() []string {
 }
 
 func (l *Logger) Close() {
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return
+	}
+	l.closed = true
+	l.mu.Unlock()
 	l.Info("Application session closing")
 	l.mu.Lock()
 	defer l.mu.Unlock()

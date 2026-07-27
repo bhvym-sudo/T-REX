@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"trex/backend/internal/model"
 	"trex/backend/internal/xapi"
@@ -25,10 +26,11 @@ type Collector struct {
 }
 
 type workerRequest struct {
-	Query      string `json:"query"`
-	ResultMode string `json:"resultMode"`
-	MaxPosts   int    `json:"maxPosts"`
-	MaxScrolls int    `json:"maxScrolls"`
+	Query       string `json:"query"`
+	ResultMode  string `json:"resultMode"`
+	MaxPosts    int    `json:"maxPosts"`
+	MaxScrolls  int    `json:"maxScrolls"`
+	ScrollDelay int    `json:"scrollDelay"`
 }
 
 type workerEvent struct {
@@ -55,6 +57,7 @@ func (c *Collector) Collect(
 	ctx context.Context,
 	query, resultMode string,
 	maxPosts int,
+	scrollDelay int,
 	progress Progress,
 ) ([]model.Post, error) {
 	query = strings.TrimSpace(query)
@@ -70,6 +73,9 @@ func (c *Collector) Collect(
 	}
 	if maxPosts <= 0 {
 		maxPosts = 5000
+	}
+	if scrollDelay <= 0 {
+		scrollDelay = 3
 	}
 
 	command, arguments, err := c.command()
@@ -99,13 +105,22 @@ func (c *Collector) Collect(
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start Python SearchTimeline worker: %w", err)
 	}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			terminateProcess(cmd)
+		case <-done:
+		}
+	}()
 
 	request := workerRequest{
-		Query: query, ResultMode: resultMode, MaxPosts: maxPosts, MaxScrolls: 600,
+		Query: query, ResultMode: resultMode, MaxPosts: maxPosts, MaxScrolls: 600, ScrollDelay: scrollDelay,
 	}
 	if err := json.NewEncoder(stdin).Encode(request); err != nil {
 		_ = stdin.Close()
-		_ = cmd.Process.Kill()
+		terminateProcess(cmd)
 		_ = cmd.Wait()
 		return nil, err
 	}
@@ -189,7 +204,7 @@ func (c *Collector) Collect(
 	}
 
 	sort.SliceStable(posts, func(i, j int) bool {
-		return posts[i].CreatedAt > posts[j].CreatedAt
+		return postTime(posts[i]).After(postTime(posts[j]))
 	})
 	if progress != nil {
 		message := fmt.Sprintf("Scan complete · %d unique post(s)", len(posts))
@@ -201,6 +216,20 @@ func (c *Collector) Collect(
 	return posts, nil
 }
 
+func postTime(post model.Post) time.Time {
+	created := strings.TrimSpace(post.CreatedAt)
+	if created == "" {
+		return time.Time{}
+	}
+	if parsed, err := time.Parse("Mon Jan 02 15:04:05 -0700 2006", created); err == nil {
+		return parsed
+	}
+	if parsed, err := time.Parse(time.RFC3339, created); err == nil {
+		return parsed
+	}
+	return time.Time{}
+}
+
 func (c *Collector) command() (string, []string, error) {
 	if executable := strings.TrimSpace(os.Getenv("TREX_SEARCH_WORKER_EXE")); executable != "" {
 		if !fileExists(executable) {
@@ -208,27 +237,27 @@ func (c *Collector) command() (string, []string, error) {
 		}
 		return executable, []string{"--profile", c.profileDir}, nil
 	}
+	if fileExists(c.scriptPath) {
+		if configured := strings.TrimSpace(os.Getenv("TREX_PYTHON")); configured != "" {
+			return configured, []string{"-u", c.scriptPath, "--profile", c.profileDir}, nil
+		}
+		if python, err := exec.LookPath("python"); err == nil {
+			return python, []string{"-u", c.scriptPath, "--profile", c.profileDir}, nil
+		}
+		if launcher, err := exec.LookPath("py"); err == nil {
+			return launcher, []string{"-3", "-u", c.scriptPath, "--profile", c.profileDir}, nil
+		}
+		return "", nil, fmt.Errorf(
+			"Python was not found. Install Python and run: pip install -r python_worker/requirements.txt",
+		)
+	}
 	if executable := filepath.Join(filepath.Dir(c.scriptPath), "search_timeline.exe"); fileExists(executable) {
 		return executable, []string{"--profile", c.profileDir}, nil
 	}
 	if executable := filepath.Join(filepath.Dir(c.scriptPath), "search.exe"); fileExists(executable) {
 		return executable, []string{"--profile", c.profileDir}, nil
 	}
-	if _, err := os.Stat(c.scriptPath); err != nil {
-		return "", nil, fmt.Errorf("Python SearchTimeline worker is missing at %s", c.scriptPath)
-	}
-	if configured := strings.TrimSpace(os.Getenv("TREX_PYTHON")); configured != "" {
-		return configured, []string{"-u", c.scriptPath, "--profile", c.profileDir}, nil
-	}
-	if python, err := exec.LookPath("python"); err == nil {
-		return python, []string{"-u", c.scriptPath, "--profile", c.profileDir}, nil
-	}
-	if launcher, err := exec.LookPath("py"); err == nil {
-		return launcher, []string{"-3", "-u", c.scriptPath, "--profile", c.profileDir}, nil
-	}
-	return "", nil, fmt.Errorf(
-		"Python was not found. Install Python and run: pip install -r python_worker/requirements.txt",
-	)
+	return "", nil, fmt.Errorf("Python SearchTimeline worker is missing at %s", c.scriptPath)
 }
 
 func fileExists(path string) bool {

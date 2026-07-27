@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -153,7 +154,7 @@ func (m *Manager) DiscoverGraphQLOperation(ctx context.Context, operation, navig
 	}
 	defer func() {
 		if cmd.Process != nil && cmd.ProcessState == nil {
-			_ = cmd.Process.Kill()
+			terminateProcess(cmd)
 		}
 	}()
 	m.logger.Info("Refreshing X GraphQL metadata for " + operation)
@@ -273,7 +274,7 @@ func (m *Manager) LaunchAndCapture(ctx context.Context, onStatus func(string, in
 	m.logger.Info("Microsoft Edge opened for X session bootstrap")
 	defer func() {
 		if cmd.Process != nil && cmd.ProcessState == nil {
-			_ = cmd.Process.Kill()
+			terminateProcess(cmd)
 		}
 	}()
 	client := &http.Client{Timeout: 2 * time.Second}
@@ -419,12 +420,28 @@ func (m *Manager) finishCapture(current Runtime, conn *websocket.Conn, cmd *exec
 	}
 	time.Sleep(900 * time.Millisecond)
 	if cmd != nil && cmd.Process != nil && cmd.ProcessState == nil {
-		_ = cmd.Process.Kill()
+		terminateProcess(cmd)
 	}
 	if onStatus != nil {
 		onStatus("X session is ready.", 100)
 	}
 	return nil
+}
+
+func terminateProcess(command *exec.Cmd) {
+	if command == nil || command.Process == nil || command.ProcessState != nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		_ = exec.Command(
+			"taskkill",
+			"/PID", strconv.Itoa(command.Process.Pid),
+			"/T",
+			"/F",
+		).Run()
+		return
+	}
+	_ = command.Process.Kill()
 }
 
 func (m *Manager) load() error {

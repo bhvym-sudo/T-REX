@@ -31,17 +31,43 @@ function bindUI() {
   $$(".tab").forEach(button => button.addEventListener("click", () => activateTab(button.dataset.tab)));
   $$("[data-close]").forEach(button => button.addEventListener("click", () => button.closest("dialog").close()));
   $("#startup-action").onclick = () => bootstrapSession(false);
+  $("#file-menu-button").addEventListener("click", toggleFileMenu);
+  $$("#file-menu [data-menu-action]").forEach(button => button.addEventListener("click", () => runFileMenuAction(button.dataset.menuAction)));
+  document.addEventListener("click", closeFileMenuFromOutside);
   $("#scan-mode").addEventListener("change", updateScanMode);
   $("#max-posts").addEventListener("change", updateMaxPostsWarning);
+  $("#scroll-delay").addEventListener("input", updateScrollDelayWarning);
   $("#custom-query").addEventListener("input", validateCustomQuery);
   $("#scan-button").addEventListener("click", startScan);
   $("#tracker-start").addEventListener("click", startTracker);
   $("#tracker-stop").addEventListener("click", stopTracker);
+  $("#tracker-query").addEventListener("input", validateTrackerQuery);
   $("#account-button").addEventListener("click", lookupAccount);
   $("#account-excel").addEventListener("click", exportCurrentAccount);
   $("#account-pdf").addEventListener("click", exportAccountPDF);
   $("#tweet-detail-button").addEventListener("click", loadTweetDetail);
   window.trexDesktop.onMenuAction(handleMenuAction);
+}
+
+function toggleFileMenu(event) {
+  event.stopPropagation();
+  const menu = $("#file-menu");
+  const open = menu.classList.toggle("hidden");
+  $("#file-menu-button").setAttribute("aria-expanded", String(!open));
+}
+
+async function runFileMenuAction(action) {
+  closeFileMenu();
+  await handleMenuAction(action);
+}
+
+function closeFileMenuFromOutside(event) {
+  if (!event.target.closest(".app-menu")) closeFileMenu();
+}
+
+function closeFileMenu() {
+  $("#file-menu").classList.add("hidden");
+  $("#file-menu-button").setAttribute("aria-expanded", "false");
 }
 
 async function startupCheck() {
@@ -166,7 +192,8 @@ async function startScan() {
     customQuery: $("#custom-query").value.trim(),
     fromDate: $("#from-date").value,
     toDate: $("#to-date").value,
-    maxPosts: Number($("#max-posts").value) || 500
+    maxPosts: Number($("#max-posts").value) || 500,
+    scrollDelay: scanScrollDelay()
   };
   state.scanContext = payload;
   state.posts = [];
@@ -194,26 +221,28 @@ async function startScan() {
 }
 
 async function startTracker() {
-  const terms = commaValues($("#tracker-terms").value);
-  if (!terms.length) return showError("Enter at least one tracker keyword.");
+  if (!validateTrackerQuery()) return;
+  const query = $("#tracker-query").value.trim();
   const payload = {
     request: {
-      mode: "keywords",
+      mode: "custom",
       resultMode: "latest",
       matchMode: "OR",
-      terms,
+      terms: [],
       accountFilters: [],
-      customQuery: "",
+      customQuery: query,
       fromDate: "",
       toDate: "",
-      maxPosts: 100
+      maxPosts: 20,
+      scrollDelay: 1
     },
     intervalSeconds: Number($("#tracker-interval").value) || 30
   };
   $("#tracker-start").disabled = true;
   $("#tracker-stop").disabled = false;
-  $("#tracker-status").textContent = "Starting authenticated headless X tracker…";
   state.trackerPosts = [];
+  $("#tracker-status").textContent = "Starting latest X query tracker...";
+  renderTrackerPosts();
   try {
     const response = await api("/api/tracker/start", { method: "POST", body: payload });
     state.trackerJob = response.jobId;
@@ -251,13 +280,24 @@ async function stopTracker() {
 }
 
 function renderTrackerPosts() {
+  state.trackerPosts = sortPostsNewest(state.trackerPosts).slice(0, 20);
   $("#tracker-count").textContent = state.trackerPosts.length;
-  $("#tracker-posts").innerHTML = state.trackerPosts.slice(0, 25).map(post => `
-    <article class="post-card"><div class="post-header"><span class="post-author">@${escapeHTML(post.author?.screen_name || "unknown")}</span><span class="post-time">${escapeHTML(post.createdAt || "")}</span></div><div class="post-text">${escapeHTML(post.text || "")}</div></article>
+  $("#tracker-posts").innerHTML = state.trackerPosts.slice(0, 20).map(post => `
+    <article class="post-card"><div class="post-header"><span class="post-author">@${escapeHTML(post.author?.screen_name || "unknown")}</span><span class="post-time">${escapeHTML(displayPostTime(post.createdAt))}</span></div><div class="post-text">${escapeHTML(post.text || "")}</div></article>
   `).join("") || '<div class="empty-state">New tracked posts will stream here.</div>';
 }
 
+function validateTrackerQuery() {
+  const query = $("#tracker-query").value.trim();
+  const error = queryError(query);
+  const hint = $("#tracker-query-validation");
+  hint.textContent = error || "Query syntax looks balanced. Tracker will use X Latest results.";
+  hint.style.color = error ? "var(--danger)" : "var(--success)";
+  return !error;
+}
+
 function renderPosts(posts, total) {
+  posts = sortPostsNewest(posts);
   $("#post-count").textContent = total;
   if (!posts.length) {
     $("#posts-list").innerHTML = '<div class="empty-state">No posts were returned for this scan.</div>';
@@ -266,7 +306,7 @@ function renderPosts(posts, total) {
   $("#posts-list").innerHTML = posts.map(post => {
     const username = post.author?.screen_name || "unknown";
     return `<article class="post-card" data-post="${escapeHTML(post.id)}">
-      <div class="post-header"><span class="post-author">@${escapeHTML(username)}</span><span class="post-time">${escapeHTML(post.createdAt || "")}</span></div>
+      <div class="post-header"><span class="post-author">@${escapeHTML(username)}</span><span class="post-time">${escapeHTML(displayPostTime(post.createdAt))}</span></div>
       <div class="post-text">${escapeHTML(post.text || "")}</div>
       <div class="post-actions">
         <button data-action="comments">Tweet Analysis</button>
@@ -473,12 +513,14 @@ function connectEvents() {
     }
     if (message.type === "post" && message.jobId === state.currentJob && message.data) {
       state.posts.push(message.data);
+      state.posts = sortPostsNewest(state.posts);
       if (state.posts.length <= 25) renderPosts(state.posts.slice(0, 25), state.posts.length);
       else $("#post-count").textContent = state.posts.length;
     }
     if (message.type === "post" && message.jobId === state.trackerJob && message.data) {
       if (!state.trackerPosts.some(post => post.id === message.data.id)) {
         state.trackerPosts.unshift(message.data);
+        state.trackerPosts = sortPostsNewest(state.trackerPosts).slice(0, 20);
         renderTrackerPosts();
       }
     }
@@ -578,6 +620,33 @@ function updateMaxPostsWarning() {
     warning.textContent = "Lower limits reduce rate-limit risk and are better for repeated searches.";
     warning.style.color = "var(--subtle)";
   }
+  updateScrollDelayWarning();
+}
+
+function scanScrollDelay() {
+  const input = $("#scroll-delay");
+  const value = Math.round(Number(input.value) || 3);
+  return Math.max(1, Math.min(15, value));
+}
+
+function updateScrollDelayWarning() {
+  const delay = scanScrollDelay();
+  const limit = Number($("#max-posts").value) || 500;
+  const warning = $("#scroll-delay-warning");
+  $("#scroll-delay").value = String(delay);
+  if (delay <= 1 && limit >= 500) {
+    warning.textContent = "Fast scrolling with high post limits can trigger X rate limits. Use it mainly for small scans.";
+    warning.style.color = "var(--danger)";
+  } else if (delay <= 2 && limit >= 1000) {
+    warning.textContent = "Low delay with large scans is risky. Increase delay if you plan repeated searches.";
+    warning.style.color = "var(--warning)";
+  } else if (delay <= 1) {
+    warning.textContent = "Fast mode selected. Best for low post limits when speed matters.";
+    warning.style.color = "var(--warning)";
+  } else {
+    warning.textContent = `${delay} second delay selected. Higher delay lowers rate-limit pressure but scans take longer.`;
+    warning.style.color = "var(--subtle)";
+  }
 }
 
 function selected(name) {
@@ -631,6 +700,40 @@ function wait(ms) {
 
 function dateStamp() {
   return new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+}
+
+function sortPostsNewest(posts) {
+  return [...posts].sort((a, b) => postTimestamp(b.createdAt) - postTimestamp(a.createdAt));
+}
+
+function postTimestamp(value) {
+  const parsed = parseTwitterDate(value);
+  return parsed ? parsed.getTime() : 0;
+}
+
+function displayPostTime(value) {
+  const parsed = parseTwitterDate(value);
+  if (!parsed) return value || "";
+  return parsed.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
+
+function parseTwitterDate(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const direct = new Date(text);
+  if (!Number.isNaN(direct.getTime())) return direct;
+  const match = text.match(/^\w{3}\s+(\w{3})\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})\s+([+-]\d{4})\s+(\d{4})$/);
+  if (!match) return null;
+  const rebuilt = `${match[1]} ${match[2]} ${match[5]} ${match[3]} GMT${match[4]}`;
+  const parsed = new Date(rebuilt);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function scanReportHTML(posts, context) {

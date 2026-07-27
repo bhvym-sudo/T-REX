@@ -96,6 +96,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) routes(mux *http.ServeMux) {
 	mux.Handle("/ws", s.hub)
 	mux.HandleFunc("GET /api/health", s.health)
+	mux.HandleFunc("POST /api/shutdown", s.shutdown)
 	mux.HandleFunc("GET /api/session/status", s.sessionStatus)
 	mux.HandleFunc("POST /api/session/bootstrap", s.bootstrapSession)
 	mux.HandleFunc("GET /api/logs", s.logs)
@@ -116,6 +117,16 @@ func (s *Server) routes(mux *http.ServeMux) {
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "trex-backend", "version": "0.1.0"})
+}
+
+func (s *Server) shutdown(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]bool{"shuttingDown": true})
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.Shutdown(ctx)
+	}()
 }
 
 func (s *Server) sessionStatus(w http.ResponseWriter, _ *http.Request) {
@@ -152,6 +163,7 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request.MaxPosts = normalizeScanLimit(request.MaxPosts)
+	request.ScrollDelay = normalizeScrollDelay(request.ScrollDelay)
 	if _, err := xapi.BuildQuery(request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -165,6 +177,7 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 	s.rememberCancel(jobID, cancel)
 	s.store.ResetPosts()
 	s.logger.Info(fmt.Sprintf("Scan post limit set to %d", request.MaxPosts))
+	s.logger.Info(fmt.Sprintf("Scan scroll delay set to %d second(s)", request.ScrollDelay))
 	s.logger.Info(fmt.Sprintf("Scan started · mode=%s · result=%s · dates=%s to %s", request.Mode, request.ResultMode, request.FromDate, request.ToDate))
 	go func() {
 		defer s.forgetCancel(jobID)
@@ -174,7 +187,7 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 			s.logger.Error("Scan failed: " + queryErr.Error())
 			return
 		}
-		posts, err := s.search.Collect(ctx, query, request.ResultMode, request.MaxPosts, func(message string, progress int, post *model.Post) {
+		posts, err := s.search.Collect(ctx, query, request.ResultMode, request.MaxPosts, request.ScrollDelay, func(message string, progress int, post *model.Post) {
 			if post == nil && strings.TrimSpace(message) != "" {
 				s.logger.Info("Scan progress · " + message)
 			}
@@ -210,6 +223,16 @@ func normalizeScanLimit(limit int) int {
 		return 5000
 	}
 	return (limit / 20) * 20
+}
+
+func normalizeScrollDelay(delay int) int {
+	if delay <= 0 {
+		return 3
+	}
+	if delay > 15 {
+		return 15
+	}
+	return delay
 }
 
 func (s *Server) posts(w http.ResponseWriter, r *http.Request) {
@@ -413,9 +436,10 @@ func (s *Server) startTracker(w http.ResponseWriter, r *http.Request) {
 	if input.IntervalSeconds < 15 {
 		input.IntervalSeconds = 30
 	}
-	if input.Request.MaxPosts <= 0 {
-		input.Request.MaxPosts = 100
-	}
+	input.Request.Mode = "custom"
+	input.Request.ResultMode = "latest"
+	input.Request.MaxPosts = 20
+	input.Request.ScrollDelay = normalizeScrollDelay(input.Request.ScrollDelay)
 	if _, err := xapi.BuildQuery(input.Request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -428,30 +452,36 @@ func (s *Server) startTracker(w http.ResponseWriter, r *http.Request) {
 		ticker := time.NewTicker(time.Duration(input.IntervalSeconds) * time.Second)
 		defer ticker.Stop()
 		cycle := 0
+		seen := map[string]bool{}
+		query, queryErr := xapi.BuildQuery(input.Request)
+		if queryErr != nil {
+			s.updateJob(jobID, "failed", 100, "Tracker failed", 0, queryErr.Error())
+			return
+		}
+		s.logger.Info(fmt.Sprintf("Tracker started · interval=%ds · query=%s", input.IntervalSeconds, query))
 		for {
 			cycle++
-			query, queryErr := xapi.BuildQuery(input.Request)
-			if queryErr != nil {
-				s.updateJob(jobID, "failed", 100, "Tracker failed", len(s.store.Posts()), queryErr.Error())
-				return
-			}
-			posts, err := s.search.Collect(ctx, query, input.Request.ResultMode, input.Request.MaxPosts, nil)
+			posts, err := s.search.Collect(ctx, query, input.Request.ResultMode, input.Request.MaxPosts, input.Request.ScrollDelay, nil)
 			if err != nil {
-				s.updateJob(jobID, "failed", 100, "Tracker failed", len(s.store.Posts()), err.Error())
+				s.updateJob(jobID, "failed", 100, "Tracker failed", len(seen), err.Error())
+				s.logger.Error("Tracker failed: " + err.Error())
 				return
 			}
 			added := 0
 			for _, post := range posts {
-				if s.store.AddPost(post) {
-					added++
-					copy := post
-					s.hub.Publish(model.Event{Type: "post", JobID: jobID, Data: &copy})
+				if post.ID == "" || seen[post.ID] {
+					continue
 				}
+				seen[post.ID] = true
+				added++
+				copy := post
+				s.hub.Publish(model.Event{Type: "post", JobID: jobID, Data: &copy})
 			}
-			s.updateJob(jobID, "running", 0, fmt.Sprintf("Tracker cycle %d complete · %d new post(s) · next check in %ds", cycle, added, input.IntervalSeconds), len(s.store.Posts()), "")
+			s.updateJob(jobID, "running", 0, fmt.Sprintf("Tracker cycle %d complete - %d new post(s) - next check in %ds", cycle, added, input.IntervalSeconds), len(seen), "")
 			select {
 			case <-ctx.Done():
-				s.updateJob(jobID, "cancelled", 100, "Tracker stopped", len(s.store.Posts()), "")
+				s.updateJob(jobID, "cancelled", 100, "Tracker stopped", len(seen), "")
+				s.logger.Info("Tracker stopped")
 				return
 			case <-ticker.C:
 			}

@@ -22,6 +22,7 @@ type ScanRequest struct {
 	FromDate       string   `json:"fromDate"`
 	ToDate         string   `json:"toDate"`
 	MaxPosts       int      `json:"maxPosts"`
+	ScrollDelay    int      `json:"scrollDelay"`
 }
 
 type Post struct {

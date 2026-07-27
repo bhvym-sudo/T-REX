@@ -1,7 +1,10 @@
 package store
 
 import (
+	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	"trex/backend/internal/model"
 )
@@ -45,7 +48,25 @@ func (s *Store) AddPost(post model.Post) bool {
 func (s *Store) Posts() []model.Post {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]model.Post(nil), s.posts...)
+	posts := append([]model.Post(nil), s.posts...)
+	sort.SliceStable(posts, func(i, j int) bool {
+		return postTime(posts[i]).After(postTime(posts[j]))
+	})
+	return posts
+}
+
+func postTime(post model.Post) time.Time {
+	created := strings.TrimSpace(post.CreatedAt)
+	if created == "" {
+		return time.Time{}
+	}
+	if parsed, err := time.Parse("Mon Jan 02 15:04:05 -0700 2006", created); err == nil {
+		return parsed
+	}
+	if parsed, err := time.Parse(time.RFC3339, created); err == nil {
+		return parsed
+	}
+	return time.Time{}
 }
 
 func (s *Store) SetAccount(key string, value model.AccountRecord) {

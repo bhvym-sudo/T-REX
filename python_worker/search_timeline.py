@@ -20,6 +20,14 @@ async def rate_delay(min_seconds=2.0, max_seconds=4.0):
     await asyncio.sleep(random.uniform(min_seconds, max_seconds))
 
 
+def normalized_delay(value):
+    try:
+        delay = float(value)
+    except (TypeError, ValueError):
+        delay = 3.0
+    return min(15.0, max(1.0, delay))
+
+
 def tweet_ids(payload):
     found = set()
 
@@ -144,6 +152,11 @@ async def collect(request, profile_dir):
     result_mode = str(request.get("resultMode") or "latest").strip().lower()
     max_posts = int(request.get("maxPosts") or 5000)
     max_scrolls = int(request.get("maxScrolls") or 600)
+    scroll_delay = normalized_delay(request.get("scrollDelay"))
+    scroll_delay_min = max(0.7, scroll_delay - 1.0)
+    scroll_delay_max = scroll_delay + 1.0
+    cursor_delay_min = max(0.45, scroll_delay * 0.4)
+    cursor_delay_max = max(cursor_delay_min + 0.25, scroll_delay * 0.8)
     if not query:
         raise RuntimeError("search query is empty")
     if result_mode not in {"latest", "top"}:
@@ -343,7 +356,7 @@ async def collect(request, profile_dir):
                         )
                         break
                     fetched += 1
-                    await rate_delay(1.5, 3.0)
+                    await rate_delay(max(0.8, scroll_delay * 0.5), max(1.0, scroll_delay))
                     continue
 
                 added_posts, _ = await ingest(payload, f"{cursor['type']} cursor")
@@ -357,7 +370,7 @@ async def collect(request, profile_dir):
                     empty_pages = 0
                 if empty_pages >= empty_limit:
                     break
-                await rate_delay(1.2, 2.4)
+                await rate_delay(cursor_delay_min, cursor_delay_max)
             return total_added
 
         page.on("response", schedule_response)
@@ -408,7 +421,7 @@ async def collect(request, profile_dir):
                         await page.keyboard.press("End")
                     except Exception:
                         pass
-                await rate_delay(2.0, 4.0)
+                await rate_delay(scroll_delay_min, scroll_delay_max)
                 try:
                     await page.wait_for_load_state("networkidle", timeout=2800)
                 except Exception:

@@ -1,10 +1,12 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
+const { request } = require("node:http");
 const { existsSync, mkdirSync } = require("node:fs");
 const { join } = require("node:path");
 
 let mainWindow;
 let backend;
+let quitting = false;
 
 function dataRoot() {
   if (!app.isPackaged) return process.cwd();
@@ -24,9 +26,11 @@ function backendCommand() {
       args: []
     };
   }
-  const compiledBackend = join(process.cwd(), "bin", "trex-backend.exe");
-  if (existsSync(compiledBackend)) {
-    return { command: compiledBackend, args: [] };
+  if (process.env.TREX_USE_COMPILED_BACKEND === "1") {
+    const compiledBackend = join(process.cwd(), "bin", "trex-backend.exe");
+    if (existsSync(compiledBackend)) {
+      return { command: compiledBackend, args: [] };
+    }
   }
   return { command: "go", args: ["run", "./backend/cmd/trex"] };
 }
@@ -34,21 +38,22 @@ function backendCommand() {
 function searchWorkerEnvironment() {
   if (app.isPackaged) {
     return {
-      TREX_SEARCH_WORKER_EXE: join(process.resourcesPath, "python_worker", "search.exe")
+      TREX_SEARCH_WORKER_EXE: join(process.resourcesPath, "python_worker", "search.exe"),
+      TREX_PYTHON_WORKER: ""
     };
   }
 
   const sourceWorker = join(process.cwd(), "python_worker", "search_timeline.py");
   if (existsSync(sourceWorker)) {
-    return { TREX_PYTHON_WORKER: sourceWorker };
+    return { TREX_PYTHON_WORKER: sourceWorker, TREX_SEARCH_WORKER_EXE: "" };
   }
 
   const executableWorker = join(process.cwd(), "python_worker", "search.exe");
   if (existsSync(executableWorker)) {
-    return { TREX_SEARCH_WORKER_EXE: executableWorker };
+    return { TREX_SEARCH_WORKER_EXE: executableWorker, TREX_PYTHON_WORKER: "" };
   }
 
-  return { TREX_PYTHON_WORKER: sourceWorker };
+  return { TREX_PYTHON_WORKER: sourceWorker, TREX_SEARCH_WORKER_EXE: "" };
 }
 
 function startBackend() {
@@ -65,12 +70,49 @@ function startBackend() {
   });
 }
 
+function requestBackendShutdown() {
+  return new Promise(resolve => {
+    if (!backend || backend.killed) {
+      resolve();
+      return;
+    }
+    const req = request({
+      hostname: "127.0.0.1",
+      port: 8787,
+      path: "/api/shutdown",
+      method: "POST",
+      timeout: 1200
+    }, res => {
+      res.resume();
+      res.on("end", resolve);
+    });
+    req.on("timeout", () => {
+      req.destroy();
+      resolve();
+    });
+    req.on("error", resolve);
+    req.end();
+  });
+}
+
+function killBackendTree() {
+  if (!backend || backend.killed || !backend.pid) return;
+  if (process.platform === "win32") {
+    spawn("taskkill", ["/PID", String(backend.pid), "/T", "/F"], {
+      windowsHide: true,
+      stdio: "ignore"
+    });
+    return;
+  }
+  backend.kill();
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1320,
-    height: 860,
+    height: 920,
     minWidth: 1120,
-    minHeight: 720,
+    minHeight: 780,
     backgroundColor: "#101214",
     show: false,
     title: "T-REX OSINT",
@@ -175,6 +217,16 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
-  if (backend && !backend.killed) backend.kill();
+app.on("before-quit", event => {
+  if (quitting || !backend || backend.killed) return;
+  event.preventDefault();
+  quitting = true;
+  requestBackendShutdown().finally(() => {
+    const fallback = setTimeout(killBackendTree, 1800);
+    backend.once("exit", () => {
+      clearTimeout(fallback);
+      app.quit();
+    });
+    setTimeout(() => app.quit(), 2300);
+  });
 });
