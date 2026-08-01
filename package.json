@@ -5,6 +5,9 @@
   "description": "Desktop OSINT workstation with Electron UI and Go backend",
   "author": "T-REX OSINT",
   "main": "desktop/main.cjs",
+  "trex": {
+    "updateFeedUrl": "https://github.com/bhvym-sudo/T-REX/releases/latest/download/latest.yml"
+  },
   "scripts": {
     "start": "electron .",
     "dev": "node scripts/dev.cjs",
@@ -57,6 +60,12 @@
       ],
       "artifactName": "T-REX-OSINT-Setup-${version}-${arch}.${ext}"
     },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://github.com/bhvym-sudo/T-REX/releases/latest/download/"
+      }
+    ],
     "nsis": {
       "oneClick": false,
       "perMachine": false,

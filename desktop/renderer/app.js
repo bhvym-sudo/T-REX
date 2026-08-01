@@ -9,7 +9,8 @@ const state = {
   trackerPosts: [],
   logs: [],
   scanContext: null,
-  sessionBootstrapRunning: false
+  sessionBootstrapRunning: false,
+  updateAvailable: null
 };
 
 const $ = selector => document.querySelector(selector);
@@ -46,6 +47,10 @@ function bindUI() {
   $("#account-excel").addEventListener("click", exportCurrentAccount);
   $("#account-pdf").addEventListener("click", exportAccountPDF);
   $("#tweet-detail-button").addEventListener("click", loadTweetDetail);
+  $("#update-download").addEventListener("click", downloadAndInstallUpdate);
+  $("#update-later").addEventListener("click", closeUpdateDialog);
+  $("#update-close").addEventListener("click", closeUpdateDialog);
+  window.trexDesktop.onUpdateEvent(handleUpdateEvent);
   window.trexDesktop.onMenuAction(handleMenuAction);
 }
 
@@ -411,10 +416,149 @@ function renderTweetDetail(record) {
 
 async function handleMenuAction(action) {
   if (action === "logs") return openLogs();
+  if (action === "check-updates") return checkForUpdatesManually();
   if (action === "export-data") return exportPosts();
   if (action === "export-analytics") return showError("Tweet analytics export will activate when the Python ML worker is connected. Raw collection stays isolated in Go.");
   if (action === "export-authors") return exportAuthors();
   if (action === "generate-report") return generateReport();
+}
+
+async function checkForUpdatesManually() {
+  showUpdateDialog({
+    title: "Checking for updates",
+    message: "Checking the configured release channel for a newer T-REX OSINT version.",
+    status: "Contacting update server...",
+    progress: 18,
+    downloadEnabled: false,
+    laterText: "Close"
+  });
+  const result = await window.trexDesktop.checkForUpdates(true);
+  if (result.error) {
+    showUpdateDialog({
+      title: "Update check failed",
+      message: result.error,
+      status: "Update check failed.",
+      progress: 0,
+      downloadEnabled: false,
+      laterText: "Close"
+    });
+  } else if (!result.available) {
+    showUpdateDialog({
+      title: "No update available",
+      message: result.message || `You are already using the latest version (${result.currentVersion || "current"}).`,
+      status: "No update is available.",
+      progress: 100,
+      downloadEnabled: false,
+      laterText: "Close"
+    });
+  }
+}
+
+function handleUpdateEvent(event) {
+  if (!event) return;
+  if (event.type === "available") {
+    state.updateAvailable = event;
+    showUpdateDialog({
+      title: "New version available",
+      message: `T-REX OSINT ${event.newVersion} is available. Current version: ${event.currentVersion}.`,
+      status: "Ready to download.",
+      progress: 0,
+      downloadEnabled: true,
+      laterText: "Later"
+    });
+  }
+  if (event.type === "none") {
+    showUpdateDialog({
+      title: "No update available",
+      message: `You are already using the latest version (${event.currentVersion}).`,
+      status: "No update is available.",
+      progress: 100,
+      downloadEnabled: false,
+      laterText: "Close"
+    });
+  }
+  if (event.type === "download-started") {
+    showUpdateDialog({
+      title: "Downloading update",
+      message: `Downloading T-REX OSINT ${event.newVersion}.`,
+      status: "Download started...",
+      progress: 1,
+      downloadEnabled: false,
+      laterText: "Hide"
+    });
+  }
+  if (event.type === "download-progress") {
+    showUpdateDialog({
+      title: "Downloading update",
+      message: `Downloading T-REX OSINT ${event.newVersion}.`,
+      status: `${event.progress}% downloaded.`,
+      progress: event.progress,
+      downloadEnabled: false,
+      laterText: "Hide"
+    });
+  }
+  if (event.type === "installing") {
+    showUpdateDialog({
+      title: "Installing update",
+      message: "The installer is running silently. Keep the application open until this completes.",
+      status: "Installing update...",
+      progress: 100,
+      downloadEnabled: false,
+      laterText: "Hide"
+    });
+  }
+  if (event.type === "installed") {
+    showUpdateDialog({
+      title: "Update installed",
+      message: `T-REX OSINT ${event.newVersion} was installed. Close and restart the application manually to use the new version.`,
+      status: "Installation complete. Please close and reopen T-REX OSINT.",
+      progress: 100,
+      downloadEnabled: false,
+      laterText: "Close"
+    });
+  }
+  if (event.type === "error") {
+    showUpdateDialog({
+      title: "Update failed",
+      message: event.message || "The update could not be completed.",
+      status: "Update failed.",
+      progress: 0,
+      downloadEnabled: Boolean(state.updateAvailable),
+      laterText: "Close"
+    });
+  }
+}
+
+function showUpdateDialog({ title, message, status, progress, downloadEnabled, laterText }) {
+  $("#update-title").textContent = title;
+  $("#update-message").textContent = message;
+  $("#update-status").textContent = status;
+  $("#update-progress").style.width = `${Math.max(0, Math.min(100, progress || 0))}%`;
+  $("#update-download").disabled = !downloadEnabled;
+  $("#update-download").classList.toggle("hidden", !downloadEnabled);
+  $("#update-later").textContent = laterText || "Later";
+  if (!$("#update-dialog").open) $("#update-dialog").showModal();
+}
+
+function closeUpdateDialog() {
+  if ($("#update-dialog").open) $("#update-dialog").close();
+}
+
+async function downloadAndInstallUpdate() {
+  $("#update-download").disabled = true;
+  showUpdateDialog({
+    title: "Preparing update",
+    message: "Preparing the background download.",
+    status: "Preparing...",
+    progress: 3,
+    downloadEnabled: false,
+    laterText: "Hide"
+  });
+  try {
+    await window.trexDesktop.downloadAndInstallUpdate();
+  } catch (error) {
+    handleUpdateEvent({ type: "error", message: error.message });
+  }
 }
 
 async function exportPosts() {

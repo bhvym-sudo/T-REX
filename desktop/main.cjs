@@ -1,12 +1,16 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
+const { createHash } = require("node:crypto");
 const { request } = require("node:http");
-const { existsSync, mkdirSync } = require("node:fs");
-const { join } = require("node:path");
+const https = require("node:https");
+const { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync } = require("node:fs");
+const { basename, dirname, join, resolve } = require("node:path");
+const packageInfo = require("../package.json");
 
 let mainWindow;
 let backend;
 let quitting = false;
+let updateState = null;
 
 function dataRoot() {
   if (!app.isPackaged) return process.cwd();
@@ -16,6 +20,157 @@ function dataRoot() {
 function iconPath() {
   if (app.isPackaged) return join(process.resourcesPath, "assets", "icon.png");
   return join(process.cwd(), "assets", "icon.png");
+}
+
+function updateFeedURL() {
+  return (process.env.TREX_UPDATE_FEED_URL || packageInfo.trex?.updateFeedUrl || "").trim();
+}
+
+function compareVersions(left, right) {
+  const a = String(left || "0").split(".").map(value => Number.parseInt(value, 10) || 0);
+  const b = String(right || "0").split(".").map(value => Number.parseInt(value, 10) || 0);
+  for (let index = 0; index < Math.max(a.length, b.length); index++) {
+    const difference = (a[index] || 0) - (b[index] || 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function parseLatestYML(text, feedURL) {
+  const version = text.match(/^version:\s*["']?([^"'\r\n]+)["']?/m)?.[1]?.trim();
+  const sha512 = text.match(/^\s*sha512:\s*["']?([^"'\r\n]+)["']?/m)?.[1]?.trim();
+  const fileURL = text.match(/^\s*url:\s*["']?([^"'\r\n]+)["']?/m)?.[1]?.trim()
+    || text.match(/^path:\s*["']?([^"'\r\n]+)["']?/m)?.[1]?.trim();
+  if (!version || !fileURL) {
+    throw new Error("Update metadata is missing version or installer URL.");
+  }
+  return {
+    version,
+    sha512: sha512 || "",
+    installerURL: new URL(fileURL, feedURL).toString()
+  };
+}
+
+function fetchText(url, redirects = 0) {
+  return new Promise((resolveText, reject) => {
+    const client = url.startsWith("https:") ? https : require("node:http");
+    const req = client.get(url, response => {
+      if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers.location && redirects < 5) {
+        response.resume();
+        fetchText(new URL(response.headers.location, url).toString(), redirects + 1).then(resolveText, reject);
+        return;
+      }
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        response.resume();
+        reject(new Error(`Update server returned HTTP ${response.statusCode}`));
+        return;
+      }
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", chunk => { body += chunk; });
+      response.on("end", () => resolveText(body));
+    });
+    req.on("error", reject);
+    req.setTimeout(15000, () => {
+      req.destroy(new Error("Update check timed out."));
+    });
+  });
+}
+
+function sendUpdateEvent(payload) {
+  mainWindow?.webContents.send("updater:event", payload);
+}
+
+async function checkForUpdates(manual = false) {
+  const feedURL = updateFeedURL();
+  if (!feedURL) {
+    if (manual) return { available: false, message: "Update feed URL is not configured." };
+    return { available: false };
+  }
+  if (!app.isPackaged && process.env.TREX_ALLOW_DEV_UPDATES !== "1") {
+    if (manual) return { available: false, message: "Updater runs only in packaged builds unless TREX_ALLOW_DEV_UPDATES=1 is set." };
+    return { available: false };
+  }
+  const metadata = parseLatestYML(await fetchText(feedURL), feedURL);
+  const currentVersion = app.getVersion();
+  const available = compareVersions(metadata.version, currentVersion) > 0;
+  updateState = available ? { ...metadata, feedURL, currentVersion } : null;
+  if (available) {
+    sendUpdateEvent({ type: "available", currentVersion, newVersion: metadata.version });
+  } else if (manual) {
+    sendUpdateEvent({ type: "none", currentVersion });
+  }
+  return { available, currentVersion, newVersion: metadata.version };
+}
+
+function downloadFile(url, targetPath, onProgress, redirects = 0) {
+  return new Promise((resolveDownload, reject) => {
+    const client = url.startsWith("https:") ? https : require("node:http");
+    const req = client.get(url, response => {
+      if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers.location && redirects < 5) {
+        response.resume();
+        downloadFile(new URL(response.headers.location, url).toString(), targetPath, onProgress, redirects + 1).then(resolveDownload, reject);
+        return;
+      }
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        response.resume();
+        reject(new Error(`Installer download returned HTTP ${response.statusCode}`));
+        return;
+      }
+      const total = Number(response.headers["content-length"]) || 0;
+      let received = 0;
+      mkdirSync(dirname(targetPath), { recursive: true });
+      const output = createWriteStream(targetPath);
+      response.on("data", chunk => {
+        received += chunk.length;
+        if (total > 0) onProgress(Math.round(received / total * 100));
+      });
+      response.pipe(output);
+      output.on("finish", () => output.close(() => resolveDownload(targetPath)));
+      output.on("error", reject);
+    });
+    req.on("error", reject);
+  });
+}
+
+function verifySha512(path, expected) {
+  if (!expected) return true;
+  const digest = createHash("sha512").update(readFileSync(path)).digest("base64");
+  return digest === expected;
+}
+
+async function downloadAndInstallUpdate() {
+  if (!updateState) await checkForUpdates(true);
+  if (!updateState) throw new Error("No update is currently available.");
+  const updatesDir = join(app.getPath("userData"), "updates");
+  mkdirSync(updatesDir, { recursive: true });
+  const installerPath = resolve(updatesDir, basename(new URL(updateState.installerURL).pathname) || `T-REX-OSINT-${updateState.version}.exe`);
+  try {
+    rmSync(installerPath, { force: true });
+  } catch {}
+  sendUpdateEvent({ type: "download-started", newVersion: updateState.version });
+  await downloadFile(updateState.installerURL, installerPath, progress => {
+    sendUpdateEvent({ type: "download-progress", progress, newVersion: updateState.version });
+  });
+  if (!verifySha512(installerPath, updateState.sha512)) {
+    throw new Error("Downloaded installer checksum did not match latest.yml.");
+  }
+  sendUpdateEvent({ type: "installing", progress: 100, newVersion: updateState.version });
+  await requestBackendShutdown();
+  await new Promise((resolveInstall, reject) => {
+    const installer = spawn(installerPath, ["/S"], {
+      detached: false,
+      windowsHide: true,
+      stdio: "ignore"
+    });
+    installer.on("error", reject);
+    installer.on("exit", code => {
+      if (code === 0) resolveInstall();
+      else reject(new Error(`Installer exited with code ${code}.`));
+    });
+  });
+  sendUpdateEvent({ type: "installed", newVersion: updateState.version });
+  return { installed: true, version: updateState.version };
 }
 
 function backendCommand() {
@@ -204,13 +359,36 @@ ipcMain.handle("report:pdf", async (_event, { html, defaultPath }) => {
 ipcMain.handle("app:info", () => ({
   backendURL: process.env.TREX_BACKEND_URL || "http://127.0.0.1:8787",
   dataRoot: dataRoot(),
-  packaged: app.isPackaged
+  packaged: app.isPackaged,
+  version: app.getVersion(),
+  updateFeedConfigured: Boolean(updateFeedURL())
 }));
+
+ipcMain.handle("updater:check", async (_event, manual = false) => {
+  try {
+    return await checkForUpdates(Boolean(manual));
+  } catch (error) {
+    sendUpdateEvent({ type: "error", message: error.message });
+    return { available: false, error: error.message };
+  }
+});
+
+ipcMain.handle("updater:download-install", async () => {
+  try {
+    return await downloadAndInstallUpdate();
+  } catch (error) {
+    sendUpdateEvent({ type: "error", message: error.message });
+    throw error;
+  }
+});
 
 app.whenReady().then(() => {
   startBackend();
   buildMenu();
   setTimeout(createWindow, process.env.TREX_BACKEND_URL ? 0 : 700);
+  setTimeout(() => checkForUpdates(false).catch(error => {
+    sendUpdateEvent({ type: "error", message: error.message });
+  }), 2500);
 });
 
 app.on("window-all-closed", () => {
